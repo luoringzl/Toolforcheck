@@ -26,6 +26,23 @@ def evidence(person, filename, kind, field, raw, normalized=None):
 
 
 class RuleTests(unittest.TestCase):
+    def test_form_table_work_records_are_structured(self):
+        text = (
+            "福建省职业技能等级认定申报表\n"
+            "何年何月至何年何月\t从事何职业\t所在单位\t证明人姓名、电话\n"
+            "2024年7月至今\t物业电工\t闽清金鑫物业管理有限公司\t黄先生，15959179257"
+        )
+        form = Material("陈俊顺", Path("陈俊顺申报表.docx"), "申报表")
+        form.text_pages = [text]
+        _, records = extract_material(form)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].company, "闽清金鑫物业管理有限公司")
+        self.assertEqual(records[0].occupation, "物业电工")
+        self.assertEqual(records[0].start, "2024-07")
+        self.assertEqual(records[0].end, "至今")
+        self.assertEqual(records[0].witness_name, "黄先生")
+        self.assertEqual(records[0].witness_phone, "15959179257")
+
     def test_identity_form_and_school_field_extraction(self):
         identity = Material("李锴铄", Path("李锴铄身份证.pdf"), "身份证")
         identity.text_pages = ["姓名 李锴铄 性别 男 民族 汉 出生 2009年2月24日\n公民身份号码 350123200902241234"]
