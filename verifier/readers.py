@@ -90,7 +90,7 @@ def _docx_pages(path: Path) -> list[str]:
     parts = [p.text for p in doc.paragraphs if p.text.strip()]
     for table in doc.tables:
         for row in table.rows:
-            parts.append("\t".join(cell.text.strip() for cell in row.cells))
+            parts.append("\t".join(re.sub(r"[\r\n]+", " ", cell.text).strip() for cell in row.cells))
     for section in doc.sections:
         parts.extend(p.text for p in section.header.paragraphs if p.text.strip())
         parts.extend(p.text for p in section.footer.paragraphs if p.text.strip())
@@ -124,24 +124,27 @@ def read_material(person: str, path: Path, cfg: AppConfig, ocr: LocalTesseractOC
                 else:
                     image = _render_pdf_page(page, cfg.image_dpi)
                     if kind == "身份证":
-                        reasons = assess_id_image(image, cfg.quality, ocr.command, ocr.environment)
+                        reasons = assess_id_image(image, cfg.quality)
                         m.quality_reasons.extend(f"第{page.number + 1}页：{r}" for r in reasons)
                     elif kind == "证件照":
                         reasons = assess_id_photo(image)
                         m.quality_reasons.extend(f"第{page.number + 1}页：{r}" for r in reasons)
-                    m.text_pages.append(
-                        ocr.recognize(image)
-                        if not m.quality_reasons and kind != "证件照"
-                        else ""
-                    )
+                    page_text = ocr.recognize(image) if not m.quality_reasons and kind != "证件照" else ""
+                    m.text_pages.append(page_text)
+                    if page_text and ocr.last_confidence is not None:
+                        m.ocr_confidence = (
+                            ocr.last_confidence if m.ocr_confidence is None
+                            else min(m.ocr_confidence, ocr.last_confidence)
+                        )
         else:
             image = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
             if kind == "身份证":
-                m.quality_reasons = assess_id_image(image, cfg.quality, ocr.command, ocr.environment)
+                m.quality_reasons = assess_id_image(image, cfg.quality)
             elif kind == "证件照":
                 m.quality_reasons = assess_id_photo(image)
             if not m.quality_reasons and kind != "证件照":
                 m.text_pages = [ocr.recognize(image)]
+                m.ocr_confidence = ocr.last_confidence
         if m.quality_reasons:
             m.quality_status = "退回"
         m.document_type = refine_document_type(m.document_type, "\n".join(m.text_pages))
