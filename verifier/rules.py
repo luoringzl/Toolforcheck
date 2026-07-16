@@ -13,6 +13,8 @@ from .normalize import duration_months, format_year_month, month_index, normaliz
 HIGHER_EDUCATION = {"大专", "高职", "本科", "研究生"}
 IN_SCHOOL = {"在籍", "在校"}
 CHSI_TYPES = {"学信网学籍证明", "学信网学历证明", "学信网学位证明"}
+LEVEL_RANK = {"初中": 1, "高中": 2, "中职": 2, "大专": 3, "高职": 3, "本科": 4, "研究生": 5}
+KEY_OCR_FIELDS = {"姓名", "身份证号", "毕业院校", "毕业时间", "毕业证编码", "企业名称"}
 
 
 def _add(result: PersonResult, category: str, field: str, status: str, message: str, values: str = "", sources: str = "") -> None:
@@ -59,6 +61,15 @@ def _select_valid_id(materials: list[Material], result: PersonResult) -> Materia
             _add(result, "材料质量", "身份证", "材料不采用", "该份身份证不作为核验依据：" + "；".join(reasons), sources=material.path.name)
         elif expiry and not unexpired:
             _add(result, "材料质量", "身份证", "材料不采用", "该份身份证已过有效期，不作为核验依据", sources=material.path.name)
+    valid_numbers = {
+        e.normalized_value
+        for material in front_candidates
+        for e in _material_evidence(material, "身份证号")
+        if validate_cn_id(e.normalized_value)[0]
+    }
+    if len(valid_numbers) > 1:
+        _add(result, "身份信息核对", "身份证号", "退回", "多份合格身份证识别出不同身份证号码，不能自动择优，请人工核实", "；".join(sorted(valid_numbers)))
+        return None
     if not front_candidates or not back_candidates:
         if id_materials:
             missing = []
@@ -66,7 +77,12 @@ def _select_valid_id(materials: list[Material], result: PersonResult) -> Materia
             if not back_candidates: missing.append("未找到在有效期内的清晰身份证背面")
             _add(result, "材料质量", "身份证", "退回", "已提交身份证中没有可组合成一套的合格正反面，请重新提交。" + "；".join(missing))
         return None
-    selected_front = front_candidates[0]
+    def front_score(material: Material) -> tuple[int, float, int]:
+        fields = {e.field for e in material.evidences}
+        confidence = material.ocr_confidence if material.ocr_confidence is not None else 1.0
+        return (sum(field in fields for field in ("姓名", "身份证号", "出生日期", "性别")), confidence, -len(material.errors))
+
+    selected_front = max(front_candidates, key=front_score)
     selected_back = max(back_candidates, key=_id_expiry)
     selected_front.selected_as_basis = True
     selected_back.selected_as_basis = True
@@ -134,12 +150,35 @@ def _compare_form_to_id(result: PersonResult, form: Material | None, identity: M
 def _education_rules(result: PersonResult, materials: list[Material], form: Material | None) -> tuple[str, str, str]:
     higher = [m for m in materials if m.document_type in CHSI_TYPES]
     diplomas = [m for m in materials if m.document_type == "学历证明"]
-    authority = higher[0] if higher else (diplomas[0] if diplomas else None)
+    candidates = higher + diplomas
+
+    def education_score(material: Material) -> tuple[int, int, int, float]:
+        fields = _by_field(material.evidences)
+        level = fields.get("学历层次", [None])[0].normalized_value if fields.get("学历层次") else ""
+        authoritative = 2 if material.document_type in CHSI_TYPES else 1
+        completeness = sum(bool(fields.get(field)) for field in ("毕业院校", "毕业时间", "毕业证编码", "学籍状态"))
+        confidence = material.ocr_confidence if material.ocr_confidence is not None else 1.0
+        return (LEVEL_RANK.get(level, 0), authoritative, completeness, confidence)
+
+    authority = max(candidates, key=education_score) if candidates else None
     if authority: authority.selected_as_basis = True
     fields = _by_field(authority.evidences) if authority else {}
     level = fields.get("学历层次", [None])[0].normalized_value if fields.get("学历层次") else ""
     status = fields.get("学籍状态", [None])[0].normalized_value if fields.get("学籍状态") else ""
     grad = fields.get("毕业时间", [None])[0].normalized_value if fields.get("毕业时间") else ""
+    same_rank = [
+        material for material in candidates
+        if material is not authority and education_score(material)[0] == education_score(authority)[0]
+    ] if authority else []
+    for field in ("毕业院校", "毕业时间", "毕业证编码"):
+        selected_value = fields.get(field, [None])[0].normalized_value if fields.get(field) else ""
+        conflicts = {
+            e.normalized_value for material in same_rank
+            for e in _material_evidence(material, field)
+            if e.normalized_value and selected_value and e.normalized_value != selected_value
+        }
+        if conflicts:
+            _add(result, "学历信息", field, "人工复核", "同层次学历材料之间存在信息冲突，不能静默择优", f"采用={selected_value}；其他={'、'.join(sorted(conflicts))}", authority.path.name)
     # 不能从申报表空白栏目标题（如“高职/本科”）推断实际学历层次。
     if form and authority:
         form_fields = _by_field(form.evidences)
@@ -179,7 +218,7 @@ def _commitment_rules(result: PersonResult, materials: list[Material], all_work:
             _add(result, "承诺函核对", "工作经历重叠", "不一致", "承诺函内工作经历不能重叠；允许断档", f"{previous.company}；{current.company}")
 
 
-def _work_rules(result: PersonResult, materials: list[Material], records: list[WorkRecord], graduation: str, identity: Material | None, registry: CompanyRegistry, cfg: AppConfig) -> None:
+def _work_rules(result: PersonResult, materials: list[Material], records: list[WorkRecord], all_records: list[WorkRecord], graduation: str, identity: Material | None, registry: CompanyRegistry, cfg: AppConfig) -> None:
     for record in records:
         record.duration_months = None if record.end == "至今" else duration_months(record.start, record.end)
         company_status, company_message = registry.validate(record.company)
@@ -196,7 +235,8 @@ def _work_rules(result: PersonResult, materials: list[Material], records: list[W
         latest = ordered[-1]
         proofs = [m for m in materials if m.document_type == "工作证明"]
         proof_companies = {
-            e.normalized_value for m in proofs for e in m.evidences if e.field == "企业名称"
+            e.normalized_value for m in proofs for e in m.evidences
+            if e.field in {"企业名称", "出具单位"}
         }
         if not proofs:
             pass  # 材料完整性规则已报告缺失。
@@ -217,6 +257,24 @@ def _work_rules(result: PersonResult, materials: list[Material], records: list[W
                 _add(result, "工作证明核对", "单位公章", "人工复核", "预审阶段允许暂未盖章；正式提交时必须加盖单位公章", sources=proof.path.name)
             elif sealed:
                 _add(result, "工作证明核对", "单位公章", "已检测", "检测到红色公章；圆形公章文字低置信度时仍需人工复核", sources=proof.path.name)
+            if identity:
+                identity_fields = _by_field(identity.evidences)
+                for field in ("姓名", "身份证号"):
+                    expected = identity_fields.get(field, [None])[0].normalized_value if identity_fields.get(field) else ""
+                    actual = proof_fields.get(field, [None])[0].normalized_value if proof_fields.get(field) else ""
+                    if not actual:
+                        _add(result, "工作证明核对", field, "缺少信息", f"工作证明未可靠读取到{field}", sources=proof.path.name)
+                    elif expected and actual != expected:
+                        _add(result, "工作证明核对", field, "不一致", f"工作证明{field}与身份证不一致", f"工作证明={actual}；身份证={expected}", proof.path.name)
+        proof_records = [record for record in all_records if record.source_type == "工作证明"]
+        matching_proofs = [record for record in proof_records if record.company == latest.company]
+        for proof_record in matching_proofs:
+            if proof_record.start and latest.start and proof_record.start != latest.start:
+                _add(result, "工作证明核对", "工作开始时间", "不一致", "工作证明开始时间与最后一段工作经历不一致", f"申报表={format_year_month(latest.start)}；工作证明={format_year_month(proof_record.start)}", proof_record.source)
+            if proof_record.end and latest.end and proof_record.end != latest.end:
+                _add(result, "工作证明核对", "工作结束时间", "不一致", "工作证明结束时间与最后一段工作经历不一致", f"申报表={format_year_month(latest.end)}；工作证明={format_year_month(proof_record.end)}", proof_record.source)
+            if proof_record.occupation and latest.occupation and proof_record.occupation != latest.occupation:
+                _add(result, "工作证明核对", "从事职业", "人工复核", "工作证明岗位与申报表最后一段岗位文字不完全一致，请确认是否为同一职业", f"申报表={latest.occupation}；工作证明={proof_record.occupation}", proof_record.source)
     for previous, current in zip(ordered, ordered[1:]):
         previous_end = month_index(previous.end) if previous.end != "至今" else 999999
         current_start = month_index(current.start)
@@ -234,11 +292,16 @@ def _work_rules(result: PersonResult, materials: list[Material], records: list[W
         if birth_month is not None and first_start is not None and first_start < birth_month + 16 * 12:
             _add(result, "时间逻辑", "首次工作年龄", "不一致", "第一份工作开始时必须年满16周岁", f"出生={format_year_month(birthday_from_id(ids[0].normalized_value))}；工作开始={format_year_month(ordered[0].start)}")
 
-    screenshot_fields = []
+    company_scopes: dict[str, list[str]] = defaultdict(list)
     for material in materials:
-        if material.document_type == "企业信息截图": screenshot_fields.extend(material.evidences)
-    screenshot_companies = {e.normalized_value for e in screenshot_fields if e.field == "企业名称"}
-    scopes = [e.normalized_value for e in screenshot_fields if e.field == "经营范围"]
+        if material.document_type != "企业信息截图":
+            continue
+        fields = _by_field(material.evidences)
+        companies = [e.normalized_value for e in fields.get("企业名称", [])]
+        scopes = [e.normalized_value for e in fields.get("经营范围", [])]
+        for company in companies:
+            company_scopes[company].extend(scopes)
+    screenshot_companies = set(company_scopes)
     for record in records:
         if record.company not in screenshot_companies:
             _add(result, "企业信息核对", "企业信息截图", "缺少或不一致", "未找到与该段工作经历企业全称完全一致的企业信息截图", record.company, record.source)
@@ -247,7 +310,8 @@ def _work_rules(result: PersonResult, materials: list[Material], records: list[W
             _add(result, "经营范围核对", "从事职业", "豁免", "职能类岗位不受企业经营范围限制", occupation, record.source)
         elif occupation:
             keywords = next((v for k, v in cfg.occupation_scope_keywords.items() if k in occupation), (occupation,))
-            matched = any(any(keyword in scope for keyword in keywords) for scope in scopes)
+            corresponding_scopes = company_scopes.get(record.company, [])
+            matched = any(any(keyword in scope for keyword in keywords) for scope in corresponding_scopes)
             _add(result, "经营范围核对", "从事职业", "一致" if matched else "人工复核", "从事职业需属于对应企业经营范围" if matched else "未能从企业信息截图经营范围中确认该职业，请人工复核", occupation, record.source)
 
 
@@ -262,6 +326,9 @@ def evaluate(person: str, materials: list[Material], evidences: list[Evidence], 
                 _add(result, "材料质量", "证件照", "通过", "证件照为二寸比例的半身彩色照片；无需提取文字", sources=material.path.name)
             else:
                 _add(result, "材料质量", "证件照", "退回", "证件照不符合要求：" + "；".join(material.quality_reasons), sources=material.path.name)
+        for evidence in material.evidences:
+            if evidence.field in KEY_OCR_FIELDS and evidence.confidence is not None and evidence.confidence < 0.65:
+                _add(result, "识别置信度", evidence.field, "人工复核", "关键字段OCR置信度较低，不自动据此判定不一致", f"{evidence.normalized_value}（置信度{evidence.confidence:.0%}）", f"{evidence.file} 第{evidence.page}页")
 
     identity = _select_valid_id(materials, result)
     forms = [m for m in materials if m.document_type == "申报表"]
@@ -280,7 +347,7 @@ def evaluate(person: str, materials: list[Material], evidences: list[Evidence], 
         _add(result, "学历信息", "学历层次", "人工复核", "未能从现有材料可靠判断学历层次，学信网材料要求需人工复核")
     _required_materials(result, materials, form_work, level, student_status)
     _compare_form_to_id(result, form, identity)
-    _work_rules(result, materials, form_work, graduation, identity, registry, cfg)
+    _work_rules(result, materials, form_work, work, graduation, identity, registry, cfg)
     _commitment_rules(result, materials, work)
 
     statuses = [f.status for f in result.findings]
