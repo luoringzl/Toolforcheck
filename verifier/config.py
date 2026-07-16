@@ -22,6 +22,7 @@ class AppConfig:
     image_dpi: int = 240
     ocr_language: str = "chi_sim+eng"
     require_company_registry: bool = False
+    audit_mode: str = "预审"  # 预审允许工作证明暂未盖章；正式审核必须盖章。
     functional_positions: tuple[str, ...] = (
         "人事", "人力资源", "行政", "财务", "会计", "出纳", "经理",
         "总经理", "项目管理", "办公室", "文员", "法务", "采购", "销售",
