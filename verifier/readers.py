@@ -45,6 +45,13 @@ def refine_document_type(kind: str, text: str) -> str:
     )
     if junior_diploma:
         return "学历证明"
+    diploma_markers = (
+        "普通高中毕业证书", "高中毕业证书", "中等职业学校毕业证书",
+        "中等专业学校毕业证书", "技工学校毕业证书", "高等教育自学考试毕业证书",
+        "成人高等教育毕业证书", "普通高等学校毕业证书",
+    )
+    if any(marker in compact for marker in diploma_markers):
+        return "学历证明"
     # 工商查询平台截图的文件名可能只是序号，也可能是企业全称。
     # 以工商字段组合识别，并兼容公司、企业和个体工商户。
     registry_name = any(key in compact for key in ("企业名称", "主体名称", "名称", "字号名称"))
