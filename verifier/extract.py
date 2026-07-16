@@ -97,6 +97,35 @@ def _work_records(text: str, material: Material, page_no: int) -> list[WorkRecor
     return records
 
 
+def _commitment_work_records(text: str, material: Material, page_no: int) -> list[WorkRecord]:
+    if material.document_type != "工作年限承诺书":
+        return []
+    records: list[WorkRecord] = []
+    for line in text.splitlines():
+        cells = [cell.strip() for cell in line.split("\t")]
+        if len(cells) < 2:
+            continue
+        period = re.sub(r"\s", "", cells[0])
+        match = re.search(r"(\d{4})年(\d{1,2})月至(\d{4})年(\d{1,2})月", period)
+        if not match:
+            continue
+        company = normalize_company(cells[1])
+        if not company or company in {"单位名称"}:
+            continue
+        occupation = cells[3].replace("/", "").strip() if len(cells) > 3 else ""
+        records.append(WorkRecord(
+            person=material.person,
+            company=company,
+            start=f"{int(match.group(1)):04d}-{int(match.group(2)):02d}",
+            end=f"{int(match.group(3)):04d}-{int(match.group(4)):02d}",
+            duration_months=None,
+            source=f"{material.path.name} 第{page_no}页",
+            occupation=occupation,
+            source_type="工作年限承诺书",
+        ))
+    return records
+
+
 def extract_material(material: Material) -> tuple[list[Evidence], list[WorkRecord]]:
     evidences: list[Evidence] = []
     work: list[WorkRecord] = []
@@ -114,7 +143,23 @@ def extract_material(material: Material) -> tuple[list[Evidence], list[WorkRecor
             "学位证编码": (_first([r"(?:学位证书编号|学位证编号)\s*[：:]?\s*([A-Za-z0-9\-]{6,40})"], text), lambda x: re.sub(r"\s", "", x).upper()),
             "学历层次": (_education_level(text), lambda x: x),
             "学历形式": (_education_form(text), lambda x: x),
-            "学籍状态": (_first([r"(?:学籍状态|学习形式|状态)\s*[：:]?\s*(在籍|在校|毕业|结业)"], text), lambda x: x),
+            "学籍状态": (_first([r"(?:学籍状态|状态)\s*[：:]?\s*(在籍|在校|保留学籍|休学|离籍|毕业|结业)"], text), lambda x: x),
+            "预计毕业时间": (_first([rf"预计毕业日期\s*[：:]?\s*({DATE})"], text), normalize_date),
+            "入学时间": (_first([rf"入学日期\s*[：:]?\s*({DATE})"], text), normalize_date),
+            "专业": (_first([r"(?:学科专业|专业)\s*[：:]?\s*([^\n\t，,。；;]{1,50})"], text), lambda x: x.strip()),
+            "学制": (_first([r"学制\s*[：:]?\s*([0-9一二三四五六七八九十]+年)"], text), lambda x: x.strip()),
+            "在线验证码": (_first([r"在线验证码\s*[：:]?\s*([A-Z0-9]{8,24})"], text), lambda x: re.sub(r"\s", "", x).upper()),
+            "获学位时间": (_first([rf"获学位日期\s*[：:]?\s*({DATE})"], text), normalize_date),
+            "学位授予单位": (_first([r"学位授予单位\s*[：:]?\s*([^\n\t，,。]{2,50})"], text), lambda x: x.strip()),
+            "学位名称": (_first([r"所授学位\s*[：:]?\s*([^\n\t，,。]{2,30})"], text), lambda x: x.strip()),
+            "职业名称": (_first([r"职业名称\s*[：:]?\s*(.{1,40}?)(?=\s*(?:工种/职业方向|工种|职业方向|职业技能等级|证书编号|$))"], text), lambda x: x.strip()),
+            "职业方向": (_first([r"(?:工种/职业方向|工种|职业方向)\s*[：:]?\s*(.{1,40}?)(?=\s*(?:职业技能等级|证书编号|$))"], text), lambda x: x.strip()),
+            "职业技能等级": (_first([r"职业技能等级\s*[：:]?\s*(.{1,20}?)(?=\s*(?:证书编号|$))"], text), lambda x: x.strip()),
+            "职业证书编号": (_first([r"(?:职业技能等级证书编号|证书编号|CertificateNo\.)\s*[：:]?\s*([A-Za-z0-9\-]{10,40})"], text), lambda x: re.sub(r"\s", "", x).upper()),
+            "申报职业": (_first([r"现申请参加\s*([^\n，,。；;()]{1,40})\s*[（(]职业/工种[）)]", r"申报职业\s*[：:]?\s*([^\n\t，,。；;]{1,40})"], text), lambda x: x.strip()),
+            "申报等级": (_first([r"[（(]职业/工种[）)]\s*[_\s]*([1-5一二三四五])[_\s]*级"], text), lambda x: x.strip()),
+            "承诺工作年限": (_first([r"工作共\s*(\d+)\s*年"], text), lambda x: str(int(x) * 12)),
+            "承诺人签名": (_first([r"(?:考生|本人|承诺人)签名\s*[：:]?\s*([\u4e00-\u9fff·]{2,8})"], text), normalize_name),
             "身份证有效期至": (_first([rf"(?:有效期限|有效期)\s*[：:]?\s*(?:{DATE}\s*[-至]\s*)?({DATE}|长期)"], text), normalize_date),
             "从事职业": (_first([r"(?:从事职业|职业工种|申报职业|职业名称)\s*[：:]?\s*([^\n\t，,。；;]{1,30})"], text), lambda x: x.strip()),
             "企业名称": (_first([r"(?:企业名称|单位名称|公司名称|用人单位|任职单位|工作单位)\s*[：:]?\s*([^\n\t，,。；;]{2,80})"], text), normalize_company),
@@ -134,5 +179,6 @@ def extract_material(material: Material) -> tuple[list[Evidence], list[WorkRecor
                     material.document_type, field, raw, normalizer(raw)
                 ))
         work.extend(_work_records(text, material, page_no))
+        work.extend(_commitment_work_records(text, material, page_no))
     material.evidences = evidences
     return evidences, work
