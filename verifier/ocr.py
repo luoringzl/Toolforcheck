@@ -1,10 +1,5 @@
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
-import tempfile
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -42,23 +37,30 @@ def _extract_rapid_text(result: Any, minimum_score: float = 0.30) -> str:
     return ""
 
 
+def _rapid_confidence(result: Any, minimum_score: float = 0.30) -> float | None:
+    scores = getattr(result, "scores", None)
+    if scores is not None:
+        values = [float(score) for score in scores if score is not None and float(score) >= minimum_score]
+        return sum(values) / len(values) if values else None
+    payload = result[0] if isinstance(result, tuple) and result else result
+    if isinstance(payload, list):
+        values = [
+            float(item[2]) for item in payload
+            if isinstance(item, (list, tuple)) and len(item) > 2
+            and item[2] is not None and float(item[2]) >= minimum_score
+        ]
+        return sum(values) / len(values) if values else None
+    return None
+
+
 class LocalTesseractOCR:
-    """离线双引擎OCR：RapidOCR主识别，Tesseract兜底及方向检测。"""
+    """兼容旧调用名称的纯离线RapidOCR引擎。"""
 
     def __init__(self, language: str = "chi_sim+eng"):
-        bundled_root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
-        bundled_cmd = bundled_root / "tesseract" / "tesseract.exe"
-        self.command = os.environ.get(
-            "TESSERACT_CMD", str(bundled_cmd) if bundled_cmd.exists() else "tesseract"
-        )
-        tessdata = bundled_root / "tesseract" / "tessdata"
-        self.environment = os.environ.copy()
-        if bundled_cmd.exists():
-            self.environment["TESSDATA_PREFIX"] = str(tessdata)
-        self.creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         self.language = language
         self.rapid = None
         self.rapid_error = ""
+        self.last_confidence: float | None = None
         try:
             from rapidocr import RapidOCR
 
@@ -67,93 +69,24 @@ class LocalTesseractOCR:
             # 安装包若发生模型异常仍允许使用Tesseract，错误会在两者均失败时报告。
             self.rapid_error = str(exc)
 
-    def _tesseract_available(self) -> bool:
-        try:
-            if Path(self.command).name.lower() == "tesseract.exe":
-                tessdata = Path(self.environment.get("TESSDATA_PREFIX", ""))
-                if not all(
-                    (tessdata / name).exists()
-                    for name in ("chi_sim.traineddata", "eng.traineddata")
-                ):
-                    return False
-            return (
-                subprocess.run(
-                    [self.command, "--version"],
-                    capture_output=True,
-                    timeout=10,
-                    env=self.environment,
-                    creationflags=self.creationflags,
-                ).returncode
-                == 0
-            )
-        except Exception:
-            return False
-
     def available(self) -> bool:
-        return self.rapid is not None or self._tesseract_available()
+        return self.rapid is not None
 
     def _recognize_rapid(self, image: Image.Image) -> str:
         if self.rapid is None:
             return ""
         array = np.asarray(image)
         result = self.rapid(array)
+        self.last_confidence = _rapid_confidence(result)
         return _extract_rapid_text(result)
-
-    def _recognize_tesseract(self, image: Image.Image) -> str:
-        with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / "page.png"
-            image.save(path)
-
-            def execute(language: str, psm: str):
-                return subprocess.run(
-                    [
-                        self.command,
-                        str(path),
-                        "stdout",
-                        "-l",
-                        language,
-                        "--psm",
-                        psm,
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=180,
-                    env=self.environment,
-                    creationflags=self.creationflags,
-                )
-
-            cp = execute(self.language, "6")
-            if cp.returncode != 0 and "chi_sim" in self.language:
-                cp = execute("eng", "6")
-            if cp.returncode != 0:
-                raise RuntimeError((cp.stderr or "").strip() or "本地OCR执行失败")
-            primary = (cp.stdout or "").strip()
-            sparse_cp = execute(self.language, "11")
-            sparse = (
-                (sparse_cp.stdout or "").strip()
-                if sparse_cp.returncode == 0
-                else ""
-            )
-            return "\n".join(part for part in (primary, sparse) if part)
 
     def recognize(self, image: Image.Image) -> str:
         image = ImageOps.exif_transpose(image).convert("RGB")
-        errors = []
+        self.last_confidence = None
         try:
             rapid_text = self._recognize_rapid(image)
             if len("".join(rapid_text.split())) >= 2:
                 return rapid_text
         except Exception as exc:
-            errors.append(f"RapidOCR: {exc}")
-
-        try:
-            fallback = self._recognize_tesseract(image)
-            if fallback.strip():
-                return fallback
-        except Exception as exc:
-            errors.append(f"Tesseract: {exc}")
-
-        detail = "；".join(errors)
-        if detail:
-            raise RuntimeError(f"离线OCR未能提取文字（{detail}）")
+            raise RuntimeError(f"离线OCR未能提取文字（RapidOCR: {exc}）") from exc
         return ""
