@@ -157,19 +157,33 @@ def _form_table_work_records(text: str, material: Material, page_no: int) -> lis
     period_pattern = re.compile(
         rf"({DATE})\s*(?:(至今)|(?:至|到|—|–|-|~|～)\s*({DATE}))"
     )
+    in_work_section = False
     for line in text.splitlines():
         raw_cells = [cell.strip(" ：:，,") for cell in line.split("\t")]
         cells = [cell for cell in raw_cells if cell and cell not in headers]
-        period_index = next(
-            (index for index, cell in enumerate(cells) if period_pattern.search(cell)),
-            None,
-        )
+        compact_line = re.sub(r"\s", "", line)
+        if "工作经历" in compact_line or ("从事何职业" in compact_line and "所在单位" in compact_line):
+            in_work_section = True
+            continue
+        if not in_work_section:
+            continue
+        period_index = None
+        match = None
+        consumed = 1
+        for index, cell in enumerate(cells):
+            for width in (1, 2, 3):
+                combined = "".join(cells[index:index + width])
+                candidate = period_pattern.search(combined)
+                if candidate:
+                    period_index, match, consumed = index, candidate, width
+                    break
+            if match:
+                break
         if period_index is None:
             continue
-        match = period_pattern.search(cells[period_index])
         if not match:
             continue
-        tail = cells[period_index + 1:]
+        tail = cells[period_index + consumed:]
         company_index = next(
             (index for index, value in enumerate(tail)
              if value.endswith(company_suffixes)),
@@ -277,22 +291,29 @@ def extract_material(material: Material) -> tuple[list[Evidence], list[WorkRecor
             "获学位时间": (_first([rf"获学位日期\s*[：:]?\s*({DATE})"], text), normalize_date),
             "学位授予单位": (_first([r"学位授予单位\s*[：:]?\s*([^\n\t，,。]{2,50})"], text), lambda x: x.strip()),
             "学位名称": (_first([r"所授学位\s*[：:]?\s*([^\n\t，,。]{2,30})"], text), lambda x: x.strip()),
-            "职业名称": (_first([r"职业名称\s*[：:]?\s*(.{1,40}?)(?=\s*(?:工种/职业方向|工种|职业方向|职业技能等级|证书编号|$))"], text), lambda x: x.strip()),
-            "职业方向": (_first([r"(?:工种/职业方向|工种|职业方向)\s*[：:]?\s*(.{1,40}?)(?=\s*(?:职业技能等级|证书编号|$))"], text), lambda x: x.strip()),
-            "职业技能等级": (_first([r"职业技能等级\s*[：:]?\s*(.{1,20}?)(?=\s*(?:证书编号|$))"], text), lambda x: x.strip()),
-            "职业证书编号": (_first([r"(?:职业技能等级证书编号|证书编号|CertificateNo\.)\s*[：:]?\s*([A-Za-z0-9\-]{10,40})"], text), lambda x: re.sub(r"\s", "", x).upper()),
-            "申报职业": (_first([r"现申请参加\s*([^\n，,。；;()]{1,40})\s*[（(]职业/工种[）)]", r"申报职业\s*[：:]?\s*([^\n\t，,。；;]{1,40})"], text), lambda x: x.strip()),
-            "申报等级": (_first([r"[（(]职业/工种[）)]\s*[_\s]*([1-5一二三四五])[_\s]*级"], text), lambda x: x.strip()),
+            "职业名称": (_first([r"职业名称\s*[：:]?\s*(.{1,40}?)(?=\s*(?:工种/职业方向|工种|职业方向|职业技能等级|证书编号|$))"], text) if material.document_type == "职业技能等级证书" else "", lambda x: x.strip()),
+            "职业方向": (_first([r"(?:工种/职业方向|工种|职业方向)\s*[：:]?\s*(.{1,40}?)(?=\s*(?:职业技能等级|证书编号|$))"], text) if material.document_type == "职业技能等级证书" else "", lambda x: x.strip()),
+            "职业技能等级": (_first([r"职业技能等级\s*[：:]?\s*(.{1,20}?)(?=\s*(?:证书编号|$))"], text) if material.document_type == "职业技能等级证书" else "", lambda x: x.strip()),
+            "职业证书编号": (_first([r"(?:职业技能等级证书编号|证书编号|CertificateNo\.)\s*[：:]?\s*([A-Za-z0-9\-]{10,40})"], text) if material.document_type == "职业技能等级证书" else "", lambda x: re.sub(r"\s", "", x).upper()),
+            "申报职业": (
+                _first([r"申报职业\s*[：:]?\s*([^\n\t，,。；;]{1,40})"], text)
+                if material.document_type == "申报表"
+                else _first([r"现申请参加\s*([^\n，,。；;()]{1,40})\s*[（(]职业/工种[）)]"], text)
+                if material.document_type == "工作年限承诺书"
+                else "",
+                lambda x: x.strip(),
+            ),
+            "申报等级": (_first([r"[（(]职业/工种[）)]\s*[_\s]*([1-5一二三四五])[_\s]*级"], text) if material.document_type in {"申报表", "工作年限承诺书"} else "", lambda x: x.strip()),
             "承诺工作年限": (_first([r"工作共\s*(\d+)\s*年"], text), lambda x: str(int(x) * 12)),
             "承诺人签名": (_first([r"(?:考生|本人|承诺人)签名\s*[：:]?\s*([\u4e00-\u9fff·]{2,8})"], text), normalize_name),
-            "证明人姓名": (_first([r"(?:证明人|部门联系人|联系人)\s*[：:]?\s*([\u4e00-\u9fff·先生女士]{2,12})"], text), lambda x: x.strip()),
-            "证明人电话": (_first([r"(?:联系电话|联系手机|电话)\s*[：:]?\s*(1\d{10}|0\d{2,3}-?\d{7,8})"], text), lambda x: re.sub(r"\D", "", x)),
+            "证明人姓名": (_first([r"(?:部门联系人|联系人)\s*[：:]?\s*([\u4e00-\u9fff·先生女士]{2,12})"], text) if material.document_type == "工作证明" else "", lambda x: x.strip()),
+            "证明人电话": (_first([r"(?:联系电话|联系手机|电话)\s*[：:]?\s*(1\d{10}|0\d{2,3}-?\d{7,8})"], text) if material.document_type == "工作证明" else "", lambda x: re.sub(r"\D", "", x)),
             "出具单位": (_first([r"单位[（(]?盖章[）)]?\s*[：:]?\s*([^\n，,。；;]{2,80})"], text), normalize_company),
             "公章状态": ("已检测到红色公章" if "[检测到红色公章]" in text else "", lambda x: x),
             "身份证有效期至": (_first([rf"(?:有效期限|有效期)\s*[：:]?\s*(?:{DATE}\s*[-至]\s*)?({DATE}|长期)"], text), normalize_date),
-            "从事职业": (_first([r"(?:从事职业|职业工种|申报职业|职业名称)\s*[：:]?\s*([^\n\t，,。；;]{1,30})"], text), lambda x: x.strip()),
-            "企业名称": (_first([r"(?:企业名称|单位名称|公司名称|用人单位|任职单位|工作单位)\s*[：:]?\s*([^\n\t，,。；;]{2,80})"], text), normalize_company),
-            "经营范围": (_first([r"经营范围\s*[：:]?\s*([^\n]{4,500})"], text), lambda x: x.strip()),
+            "从事职业": (_first([r"(?:职业工种|职业名称)\s*[：:]?\s*([^\n\t，,。；;]{1,30})"], text) if material.document_type == "职业技能等级证书" else "", lambda x: x.strip()),
+            "企业名称": (_first([r"(?:企业名称|主体名称|字号名称|名称)\s*[：:]?\s*([^\n\t，,。；;]{2,80})"], text) if material.document_type == "企业信息截图" else "", normalize_company),
+            "经营范围": (_first([r"经营范围\s*[：:]?\s*([^\n]{4,500})"], text) if material.document_type == "企业信息截图" else "", lambda x: x.strip()),
         }
         # 普通学历证明以证书页面最后出现的日期作为右下角落款日期。
         dates = _all_dates(text)
