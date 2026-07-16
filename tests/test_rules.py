@@ -55,6 +55,32 @@ class RuleTests(unittest.TestCase):
         evidences, _ = extract_material(self_study_diploma)
         self.assertEqual(next(e.normalized_value for e in evidences if e.field == "学历形式"), "高等教育自学考试")
 
+    def test_chsi_subtypes_and_skill_certificate(self):
+        student = "教育部学籍在线验证报告 学校名称 福建农业职业技术学院 层次 专科 学籍状态 在籍（注册学籍） 入学日期 2024年09月08日 预计毕业日期 2027年06月26日 在线验证码 ARTJPH2ZKNDQ22CK"
+        degree = "中国高等教育学位在线验证报告 学位授予单位 福建师范大学 所授学位 艺术学学士学位 获学位日期 2019年06月17日 学位证书编号 1039442019003115"
+        skill = "职业技能等级证书 姓名 吴海娟 职业名称 互联网营销师 工种/职业方向 平台管理员 职业技能等级 三级/高级工 证书编号 S000035001051243000362"
+        self.assertEqual(refine_document_type("其他材料", student), "学信网学籍证明")
+        self.assertEqual(refine_document_type("学历证明", degree), "学信网学位证明")
+        self.assertEqual(refine_document_type("其他材料", skill), "职业技能等级证书")
+        m = Material("吴海娟", Path("证书.jpg"), "职业技能等级证书")
+        m.text_pages = [skill]
+        evidences, _ = extract_material(m)
+        fields = {e.field: e.normalized_value for e in evidences}
+        self.assertEqual(fields["职业名称"], "互联网营销师")
+        self.assertEqual(fields["职业技能等级"], "三级/高级工")
+        self.assertEqual(fields["职业证书编号"], "S000035001051243000362")
+
+    def test_commitment_word_table_and_month_total(self):
+        text = "工作年限承诺书\n姓名: 彭思敏，现申请参加 公共营养师 (职业/工种)_4__级职业技能等级认定，从事本职业或相关职业工作共5年，工作经历如下：\n2021年8月至2022年12月\t皇冠蛋糕店\t遂川县\t西点裱花师\n2023年2月至2026年5月\t可斯贝莉门店\t泉州市\t西点裱花师\n2026年6月至2026年7月\t福州市鼓楼区美日甜甜品店\t福州市\t西点裱花师\n考生签名：彭思敏"
+        m = Material("彭思敏", Path("工作年限承诺书.docx"), "工作年限承诺书")
+        m.text_pages = [text]
+        evidences, records = extract_material(m)
+        self.assertEqual(len(records), 3)
+        self.assertEqual(sum(duration_months(w.start, w.end) or 0 for w in records), 59)
+        fields = {e.field: e.normalized_value for e in evidences}
+        self.assertEqual(fields["承诺工作年限"], "60")
+        self.assertEqual(fields["承诺人签名"], "彭思敏")
+
     def test_dates_chinese_and_duration(self):
         self.assertEqual(normalize_date("2020年3月"), "2020-03")
         self.assertEqual(normalize_date("二〇二〇年七月"), "2020-07")
