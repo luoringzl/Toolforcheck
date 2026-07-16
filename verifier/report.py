@@ -46,7 +46,7 @@ def write_report(results: list[PersonResult], output: Path) -> None:
     total = _sheet(wb, "人员核验总表", ["人员", "总体结果", "材料数", "退回数", "不一致数", "待复核数"])
     detail = _sheet(wb, "字段差异明细", ["人员", "类别", "字段", "状态", "说明", "字段值", "来源文件与页码"])
     complete = _sheet(wb, "材料完整性审核", ["人员", "材料类型", "状态", "判断依据", "数量或结果", "来源"])
-    works = _sheet(wb, "工作经历明细", ["人员", "企业名称", "从事职业", "开始时间", "结束时间", "工作月数", "企业名称状态", "企业名称说明", "经营范围", "来源"])
+    works = _sheet(wb, "工作经历明细", ["人员", "企业名称", "从事职业", "开始时间", "结束时间", "工作月数", "证明人姓名", "证明人电话", "企业名称状态", "企业名称说明", "经营范围", "来源"])
     mats = _sheet(wb, "材料清单", ["人员", "文件", "材料类型", "是否核验依据", "质量状态", "质量原因", "处理异常"])
     rejects = _sheet(wb, "退回清单", ["人员", "字段/材料", "退回原因", "来源"])
     for r in results:
@@ -59,7 +59,7 @@ def write_report(results: list[PersonResult], output: Path) -> None:
             if f.status == "退回":
                 rejects.append([f.person, f.field, f.message, f.sources])
         for w in r.work_records:
-            works.append([w.person, w.company, w.occupation, w.start, w.end, w.duration_months, w.company_status, w.company_message, w.business_scope, w.source])
+            works.append([w.person, w.company, w.occupation, w.start, w.end, w.duration_months, w.witness_name, w.witness_phone, w.company_status, w.company_message, w.business_scope, w.source])
         for m in r.materials:
             mats.append([m.person, m.path.name, m.document_type, "是" if m.selected_as_basis else "否", m.quality_status, "；".join(m.quality_reasons), "；".join(m.errors)])
     for ws in wb.worksheets:
