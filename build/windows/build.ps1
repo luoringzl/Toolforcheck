@@ -26,7 +26,7 @@ Invoke-WebRequest "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast
 
 # PyInstaller onedir puts runtime data under _internal. Copy explicitly to the
 # exact path used by verifier/ocr.py instead of relying on directory-data layout.
-$BundledTesseract = Join-Path $Root "dist\核验工具\_internal\tesseract"
+$BundledTesseract = Join-Path $Root "dist\OfflinePersonnelVerifier\_internal\tesseract"
 if (Test-Path $BundledTesseract) { Remove-Item -Recurse -Force $BundledTesseract }
 New-Item -ItemType Directory -Force -Path $BundledTesseract | Out-Null
 Copy-Item "$Vendor\*" $BundledTesseract -Recurse -Force
