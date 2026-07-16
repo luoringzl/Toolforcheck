@@ -36,6 +36,9 @@ def _all_dates(text: str) -> list[str]:
 
 
 def _education_level(text: str) -> str:
+    text = re.sub(r"\s", "", text)
+    if any(marker in text for marker in ("本校初中部", "初中部学习", "初中学习", "（初）毕字", "(初)毕字")):
+        return "初中"
     levels = ["研究生", "硕士", "博士", "本科", "高职", "大专", "专科", "中职", "中专", "高中", "初中"]
     for level in levels:
         if level in text:
