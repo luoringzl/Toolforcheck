@@ -40,6 +40,21 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(refine_document_type("其他材料", company_page), "企业信息截图")
         self.assertEqual(refine_document_type("其他材料", sole_trader_page), "企业信息截图")
 
+    def test_high_school_and_bachelor_diplomas(self):
+        high_school = "普通高中毕业证书 学生彭思敏 自二〇一八年九月至二〇二一年七月在本校修业期满，成绩合格，准予毕业。学校：三合中学 毕业证号：20210827040385 二〇二一年七月十日"
+        bachelor = "毕业证书 学生陈璐 于2007年1月至2010年1月在本校英语专业业余学习，修完三年制专升本科教学计划规定的全部课程，成绩合格，准予毕业。校名：漳州师范学院 证书编号：104025201005000449"
+        self_study = "高等教育自学考试毕业证书 姓名庄艳华 参加人力资源管理专业本科高等教育自学考试，全部课程成绩合格，经审定，准予毕业。高等院校：福建师范大学 证书编号65359101211143622"
+        for content, expected_level in ((high_school, "高中"), (bachelor, "本科"), (self_study, "本科")):
+            diploma = Material("测试", Path("毕业证书.jpg"), refine_document_type("其他材料", content))
+            diploma.text_pages = [content]
+            evidences, _ = extract_material(diploma)
+            self.assertEqual(diploma.document_type, "学历证明")
+            self.assertEqual(next(e.normalized_value for e in evidences if e.field == "学历层次"), expected_level)
+        self_study_diploma = Material("测试", Path("毕业证书.pdf"), "学历证明")
+        self_study_diploma.text_pages = [self_study]
+        evidences, _ = extract_material(self_study_diploma)
+        self.assertEqual(next(e.normalized_value for e in evidences if e.field == "学历形式"), "高等教育自学考试")
+
     def test_dates_chinese_and_duration(self):
         self.assertEqual(normalize_date("2020年3月"), "2020-03")
         self.assertEqual(normalize_date("二〇二〇年七月"), "2020-07")
