@@ -101,8 +101,18 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(normalize_date("2020年3月"), "2020-03")
         self.assertEqual(normalize_date("二〇二〇年七月"), "2020-07")
         self.assertEqual(normalize_date("二零二零年七月十五日"), "2020-07-15")
+        self.assertEqual(normalize_date("二O二四年七月十五日"), "2024-07-15")
         self.assertEqual(format_year_month("2018-07-07"), "2018.7")
         self.assertEqual(duration_months("2020-03", "2021-02"), 12)
+
+    def test_form_labels_are_not_values(self):
+        text = "福建省职业技能等级认定申报表\n姓名\t陈俊顺\t性别\t男\n最高学历\t初中/中职/高中\t毕业院校\n学习经历\t初中\t高职/本科"
+        m = Material("陈俊顺", Path("陈俊顺申报表.docx"), "申报表")
+        m.text_pages = [text]
+        evidences, _ = extract_material(m)
+        fields = {e.field: e.normalized_value for e in evidences}
+        self.assertEqual(fields.get("姓名"), "陈俊顺")
+        self.assertNotIn("学历层次", fields)
 
     def test_id_validation(self):
         ok, reasons = validate_cn_id("11010519491231002X")
