@@ -21,9 +21,12 @@ def _first(patterns: list[str], text: str, flags: int = 0) -> str:
 
 def _best_id(text: str) -> str:
     labelled = re.findall(r"(?:公民身份号码|身份证(?:号码|号)?)\s*[：:]?\s*([0-9Xx\s]{18,28})", text)
-    general = re.findall(r"(?<!\d)([1-9]\d{16}[0-9Xx])(?!\d)", re.sub(r"\s", "", text))
+    compact = re.sub(r"\s", "", text)
+    general = re.findall(r"(?<!\d)([1-9]\d{16}[0-9Xx])(?!\d)", compact)
+    # Word文本框和OCR有时会在身份证号码中插入点、下划线或短横线。
+    separated = re.findall(r"(?<![0-9Xx])([1-9][0-9Xx·._\-\s]{17,38})(?![0-9Xx])", text)
     candidates = []
-    for raw in labelled + general:
+    for raw in labelled + general + separated:
         number = normalize_id(raw)
         if len(number) == 18 and number not in candidates:
             candidates.append(number)
@@ -67,13 +70,42 @@ def _education_form(text: str) -> str:
 
 
 def _person_name(text: str, expected_person: str) -> str:
+    compact = re.sub(r"\s", "", text)
+    # 文件夹姓名只用于锁定OCR中实际出现的姓名，不能在未识别时自动补值。
+    if expected_person and re.search(
+        rf"(?:姓名|学生)[:：]?[，,]?{re.escape(expected_person)}(?=性别|民族|出生|，|,|$)",
+        compact,
+    ):
+        return expected_person
     rejected = {"姓名", "性别", "出生年月", "身份证号", "联系电话", "学生"}
-    matches = re.findall(r"(?:姓名|学生)\s*[：:]?\s*([\u4e00-\u9fff·]{2,8})", text)
-    for value in matches:
-        value = value.strip()
-        if value not in rejected:
-            return value
-    return expected_person if expected_person and expected_person in re.sub(r"\s", "", text) else ""
+    patterns = [
+        r"(?:姓名|学生)\s*[：:]?\s*([\u4e00-\u9fff·]{2,4})(?=\s*(?:性别|民族|出生|，|,|$))",
+        r"(?:姓名|学生)\s*[：:]?\s*([\u4e00-\u9fff·]{2,4})",
+    ]
+    for pattern in patterns:
+        for value in re.findall(pattern, text):
+            value = value.strip()
+            if value not in rejected and not any(label in value for label in rejected):
+                return value
+    return expected_person if expected_person and expected_person in compact else ""
+
+
+def _school_name(text: str) -> str:
+    compact = re.sub(r"[\s_]+", "", text)
+    suffix = r"(?:大学|学院|学校|中学|中专|职高)"
+    labelled = re.findall(
+        rf"(?:毕业院校|毕业学校|院校名称|学校名称|高等院校|校名|学校)[:：]?"
+        rf"([\u4e00-\u9fff]{{2,30}}?{suffix})",
+        compact,
+    )
+    general = re.findall(rf"([\u4e00-\u9fff]{{2,30}}?{suffix})", compact)
+    rejected = {"本校", "学校", "院校名称", "毕业院校"}
+    values = []
+    for value in labelled + general:
+        value = re.sub(r"^(?:名称|姓名)", "", value)
+        if value not in rejected and not value.startswith(("在本校", "于本校")):
+            values.append(value)
+    return max(values, key=len) if values else ""
 
 
 def _work_records(text: str, material: Material, page_no: int) -> list[WorkRecord]:
@@ -163,7 +195,7 @@ def extract_material(material: Material) -> tuple[list[Evidence], list[WorkRecor
             "性别": (_first([r"性别\s*[：:]?\s*([男女])"], text), lambda x: x),
             "身份证号": (id_number, normalize_id),
             "出生日期": (_first([rf"(?:出生日期|出生年月|出生)\s*[：:]?\s*({DATE})"], text), normalize_date),
-            "毕业院校": (_first([r"(?:毕业院校|毕业学校|院校名称|学校名称|高等院校|校名|学校)\s*[：:]?\s*([^\n\t，,。]{2,50}(?:大学|学院|学校|中学|中专|职高))", r"([\u4e00-\u9fff]{2,30}(?:大学|学院|学校|中学|中专|职高))"], text), lambda x: x.strip()),
+            "毕业院校": (_school_name(text) if material.document_type in {"申报表", "学历证明", "学信网学籍证明", "学信网学历证明"} else "", lambda x: x.strip()),
             "毕业证编码": (_first([r"(?:毕业证书编号|学历证书编号|毕业证编号|毕业证号|证书编号)\s*[：:]?\s*([A-Za-z0-9\-]{6,40})", r"[（(](?:初|高)[）)]毕字[^号\n]{0,20}第?\s*([A-Za-z0-9\-]{6,40})\s*号"], text), lambda x: re.sub(r"\s", "", x).upper()),
             "学位证编码": (_first([r"(?:学位证书编号|学位证编号)\s*[：:]?\s*([A-Za-z0-9\-]{6,40})"], text), lambda x: re.sub(r"\s", "", x).upper()),
             "学历层次": ("" if material.document_type == "申报表" else _education_level(text), lambda x: x),
