@@ -4,4 +4,5 @@ python-docx>=1.1
 openpyxl>=3.1
 PyYAML>=6.0
 numpy>=1.26
-
+rapidocr==3.9.1
+onnxruntime>=1.18,<2
