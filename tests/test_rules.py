@@ -26,6 +26,47 @@ def evidence(person, filename, kind, field, raw, normalized=None):
 
 
 class RuleTests(unittest.TestCase):
+    def test_higher_education_material_is_selected(self):
+        person = "测试人员"
+        high = material(person, "高中毕业证.jpg", "学历证明", [
+            evidence(person, "高中毕业证.jpg", "学历证明", "学历层次", "高中"),
+            evidence(person, "高中毕业证.jpg", "学历证明", "毕业院校", "示例中学"),
+        ])
+        bachelor = material(person, "本科毕业证.jpg", "学历证明", [
+            evidence(person, "本科毕业证.jpg", "学历证明", "学历层次", "本科"),
+            evidence(person, "本科毕业证.jpg", "学历证明", "毕业院校", "示例大学"),
+            evidence(person, "本科毕业证.jpg", "学历证明", "毕业证编码", "1234567890"),
+        ])
+        evaluate(person, [high, bachelor], high.evidences + bachelor.evidences, [], CompanyRegistry())
+        self.assertFalse(high.selected_as_basis)
+        self.assertTrue(bachelor.selected_as_basis)
+
+    def test_business_scope_is_matched_to_same_company(self):
+        person = "测试人员"
+        company_a = "甲物业管理有限公司"
+        company_b = "乙机电设备有限公司"
+        record = WorkRecord(person, company_a, "2024-01", "至今", None, "申报表 第1页", occupation="电工", source_type="申报表", witness_name="张三", witness_phone="13800138000")
+        shot_a = material(person, "甲公司.png", "企业信息截图", [
+            evidence(person, "甲公司.png", "企业信息截图", "企业名称", company_a),
+            evidence(person, "甲公司.png", "企业信息截图", "经营范围", "物业管理"),
+        ])
+        shot_b = material(person, "乙公司.png", "企业信息截图", [
+            evidence(person, "乙公司.png", "企业信息截图", "企业名称", company_b),
+            evidence(person, "乙公司.png", "企业信息截图", "经营范围", "电气设备维修"),
+        ])
+        result = evaluate(person, [shot_a, shot_b], shot_a.evidences + shot_b.evidences, [record], CompanyRegistry())
+        findings = [f for f in result.findings if f.category == "经营范围核对"]
+        self.assertTrue(findings)
+        self.assertEqual(findings[0].status, "人工复核")
+
+    def test_low_confidence_key_field_requires_review(self):
+        person = "测试人员"
+        m = material(person, "身份证.jpg", "身份证", [
+            Evidence(person, "身份证.jpg", 1, "身份证", "姓名", "测式人员", "测式人员", confidence=0.52)
+        ])
+        result = evaluate(person, [m], m.evidences, [], CompanyRegistry())
+        self.assertTrue(any(f.category == "识别置信度" and f.field == "姓名" for f in result.findings))
+
     def test_form_table_work_records_are_structured(self):
         text = (
             "福建省职业技能等级认定申报表\n"
