@@ -126,7 +126,14 @@ def read_material(person: str, path: Path, cfg: AppConfig, ocr: LocalTesseractOC
                     if kind == "身份证":
                         reasons = assess_id_image(image, cfg.quality, ocr.command, ocr.environment)
                         m.quality_reasons.extend(f"第{page.number + 1}页：{r}" for r in reasons)
-                    m.text_pages.append(ocr.recognize(image) if not m.quality_reasons else "")
+                    elif kind == "证件照":
+                        reasons = assess_id_photo(image)
+                        m.quality_reasons.extend(f"第{page.number + 1}页：{r}" for r in reasons)
+                    m.text_pages.append(
+                        ocr.recognize(image)
+                        if not m.quality_reasons and kind != "证件照"
+                        else ""
+                    )
         else:
             image = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
             if kind == "身份证":
