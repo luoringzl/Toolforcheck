@@ -10,8 +10,8 @@ def compact(value: str) -> str:
 
 def normalize_date(value: str) -> str:
     value = compact(value)
-    chinese_digits = {"〇": "0", "零": "0", "一": "1", "二": "2", "三": "3", "四": "4", "五": "5", "六": "6", "七": "7", "八": "8", "九": "9"}
-    cm = re.search(r"([〇零一二三四五六七八九]{4})年([一二三四五六七八九十]{1,3})月(?:([一二三四五六七八九十]{1,3})日)?", value)
+    chinese_digits = {"〇": "0", "○": "0", "O": "0", "零": "0", "一": "1", "二": "2", "三": "3", "四": "4", "五": "5", "六": "6", "七": "7", "八": "8", "九": "9"}
+    cm = re.search(r"([〇○O零一二三四五六七八九]{4})年([一二三四五六七八九十]{1,3})月(?:([一二三四五六七八九十]{1,3})日)?", value)
     if cm:
         year = int("".join(chinese_digits[x] for x in cm.group(1)))
         def cn_num(s: str | None) -> int | None:
