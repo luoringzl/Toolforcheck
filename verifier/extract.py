@@ -139,6 +139,73 @@ def _work_records(text: str, material: Material, page_no: int) -> list[WorkRecor
     return records
 
 
+def _form_table_work_records(text: str, material: Material, page_no: int) -> list[WorkRecord]:
+    """读取申报表“工作经历”逐行表格，不依赖每行重复打印字段标题。"""
+    if material.document_type != "申报表":
+        return []
+    records: list[WorkRecord] = []
+    headers = {
+        "何年何月至何年何月", "从何年何月开始", "从事何职业",
+        "所在单位", "证明人姓名、电话", "证明人姓名电话",
+    }
+    company_suffixes = (
+        "有限公司", "股份有限公司", "有限责任公司", "公司", "企业",
+        "中心", "事务所", "合作社", "商行", "商店", "门店", "经营部",
+        "工作室", "学校", "医院", "酒店", "宾馆", "厂",
+    )
+    period_pattern = re.compile(
+        rf"({DATE})\s*(?:(至今)|(?:至|到|—|–|-|~|～)\s*({DATE}))"
+    )
+    for line in text.splitlines():
+        raw_cells = [cell.strip(" ：:，,") for cell in line.split("\t")]
+        cells = [cell for cell in raw_cells if cell and cell not in headers]
+        period_index = next(
+            (index for index, cell in enumerate(cells) if period_pattern.search(cell)),
+            None,
+        )
+        if period_index is None:
+            continue
+        match = period_pattern.search(cells[period_index])
+        if not match:
+            continue
+        tail = cells[period_index + 1:]
+        company_index = next(
+            (index for index, value in enumerate(tail)
+             if value.endswith(company_suffixes)),
+            1 if len(tail) >= 2 else (0 if tail else None),
+        )
+        if company_index is None:
+            continue
+        company = normalize_company(tail[company_index])
+        if not company:
+            continue
+        occupation_values = [
+            value for value in tail[:company_index]
+            if value not in {"从事何职业", "职业", "工种", "岗位"}
+        ]
+        occupation = occupation_values[-1] if occupation_values else ""
+        witness_text = " ".join(tail[company_index + 1:])
+        phone_match = re.search(r"(?<!\d)(1\d{10}|0\d{2,3}-?\d{7,8})(?!\d)", witness_text)
+        witness_phone = re.sub(r"\D", "", phone_match.group(1)) if phone_match else ""
+        name_text = witness_text[:phone_match.start()] if phone_match else witness_text
+        name_match = re.search(r"([\u4e00-\u9fff·]{2,8})(?:先生|女士)?", name_text)
+        witness_name = name_match.group(1) if name_match else ""
+        end_raw = match.group(2) or match.group(3)
+        records.append(WorkRecord(
+            person=material.person,
+            company=company,
+            start=normalize_date(match.group(1)),
+            end="至今" if end_raw == "至今" else normalize_date(end_raw),
+            duration_months=None,
+            source=f"{material.path.name} 第{page_no}页",
+            occupation=occupation,
+            source_type="申报表",
+            witness_name=witness_name,
+            witness_phone=witness_phone,
+        ))
+    return records
+
+
 def _commitment_work_records(text: str, material: Material, page_no: int) -> list[WorkRecord]:
     if material.document_type != "工作年限承诺书":
         return []
@@ -239,7 +306,11 @@ def extract_material(material: Material) -> tuple[list[Evidence], list[WorkRecor
                     material.person, material.path.name, page_no,
                     material.document_type, field, raw, normalizer(raw)
                 ))
-        work.extend(_work_records(text, material, page_no))
+        form_records = _form_table_work_records(text, material, page_no)
+        work.extend(form_records)
+        # 非表格式材料或未命中表格时，保留原有“带字段标签”解析。
+        if not form_records:
+            work.extend(_work_records(text, material, page_no))
         work.extend(_commitment_work_records(text, material, page_no))
         work.extend(_work_proof_record(text, material, page_no))
     material.evidences = evidences
