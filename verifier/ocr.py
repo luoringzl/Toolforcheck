@@ -18,13 +18,18 @@ class LocalTesseractOCR:
         )
         tessdata = bundled_root / "tesseract" / "tessdata"
         self.environment = os.environ.copy()
-        if tessdata.exists():
+        if bundled_cmd.exists():
+            # Always override stale machine-level values for the bundled OCR.
             self.environment["TESSDATA_PREFIX"] = str(tessdata)
         self.creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         self.language = language
 
     def available(self) -> bool:
         try:
+            if Path(self.command).name.lower() == "tesseract.exe":
+                tessdata = Path(self.environment.get("TESSDATA_PREFIX", ""))
+                if not all((tessdata / name).exists() for name in ("chi_sim.traineddata", "eng.traineddata")):
+                    return False
             return subprocess.run(
                 [self.command, "--version"], capture_output=True, timeout=10,
                 env=self.environment, creationflags=self.creationflags
