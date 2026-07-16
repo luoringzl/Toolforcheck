@@ -46,7 +46,7 @@ def detect_rotation(image: Image.Image, tesseract_cmd: str, environment: dict[st
             capture_output=True, text=True, timeout=20, env=environment,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
         )
-        for line in cp.stdout.splitlines():
+        for line in (cp.stdout or "").splitlines():
             if line.startswith("Rotate:"):
                 return float(line.split(":", 1)[1].strip())
     except Exception:
