@@ -6,7 +6,7 @@ from .idcard import validate_cn_id
 from .models import Evidence, Material, WorkRecord
 from .normalize import normalize_company, normalize_date, normalize_id, normalize_name
 
-ARABIC_DATE = r"(?:19\d{2}|20\d{2})[年./\-]\d{1,2}(?:[月./\-]\d{1,2}日?)?"
+ARABIC_DATE = r"(?:19\d{2}|20\d{2})[年./\-]\d{1,2}(?:(?:月(?:\d{1,2}日?)?)|(?:[./\-]\d{1,2}日?))?"
 CHINESE_DATE = r"[〇零一二三四五六七八九]{4}年[一二三四五六七八九十]{1,3}月(?:[一二三四五六七八九十]{1,3}日)?"
 DATE = rf"(?:{ARABIC_DATE}|{CHINESE_DATE})"
 
@@ -76,13 +76,13 @@ def _work_records(text: str, material: Material, page_no: int) -> list[WorkRecor
     scopes = [m.group(1).strip() for m in re.finditer(
         r"经营范围\s*[：:]?\s*([^\n]{4,500})", text
     )]
-    ranges = list(re.finditer(rf"({DATE})\s*(?:至|到|—|–|-|~|～)\s*({DATE}|至今)", text))
+    ranges = list(re.finditer(rf"({DATE})\s*(?:至今|(?:至|到|—|–|-|~|～)\s*({DATE}))", text))
     records: list[WorkRecord] = []
     for index, date_match in enumerate(ranges):
         company = companies[min(index, len(companies) - 1)] if companies else ""
         if not company:
             continue
-        end_raw = date_match.group(2)
+        end_raw = date_match.group(2) or "至今"
         records.append(WorkRecord(
             person=material.person,
             company=normalize_company(company),
@@ -126,6 +126,21 @@ def _commitment_work_records(text: str, material: Material, page_no: int) -> lis
     return records
 
 
+def _work_proof_record(text: str, material: Material, page_no: int) -> list[WorkRecord]:
+    if material.document_type != "工作证明":
+        return []
+    company = _first([
+        r"单位[（(]?盖章[）)]?\s*[：:]?\s*([^\n，,。；;]{2,80})",
+        r"(?:单位名称|工作单位)\s*[：:]?\s*([^\n，,。；;]{2,80})",
+    ], text)
+    compact_text = re.sub(r"\s", "", text)
+    period = re.search(rf"自({DATE})(?:至今|(?:至|到|—|–|-)({DATE}))", compact_text)
+    occupation = _first([r"(?:从事|担任)\s*([^\n，,。；;]{1,40}?)(?:相关行业)?工作"], text)
+    if not company or not period:
+        return []
+    return [WorkRecord(material.person, normalize_company(company), normalize_date(period.group(1)), "至今" if period.group(2) is None else normalize_date(period.group(2)), None, f"{material.path.name} 第{page_no}页", occupation=occupation, source_type="工作证明")]
+
+
 def extract_material(material: Material) -> tuple[list[Evidence], list[WorkRecord]]:
     evidences: list[Evidence] = []
     work: list[WorkRecord] = []
@@ -160,6 +175,10 @@ def extract_material(material: Material) -> tuple[list[Evidence], list[WorkRecor
             "申报等级": (_first([r"[（(]职业/工种[）)]\s*[_\s]*([1-5一二三四五])[_\s]*级"], text), lambda x: x.strip()),
             "承诺工作年限": (_first([r"工作共\s*(\d+)\s*年"], text), lambda x: str(int(x) * 12)),
             "承诺人签名": (_first([r"(?:考生|本人|承诺人)签名\s*[：:]?\s*([\u4e00-\u9fff·]{2,8})"], text), normalize_name),
+            "证明人姓名": (_first([r"(?:证明人|部门联系人|联系人)\s*[：:]?\s*([\u4e00-\u9fff·先生女士]{2,12})"], text), lambda x: x.strip()),
+            "证明人电话": (_first([r"(?:联系电话|联系手机|电话)\s*[：:]?\s*(1\d{10}|0\d{2,3}-?\d{7,8})"], text), lambda x: re.sub(r"\D", "", x)),
+            "出具单位": (_first([r"单位[（(]?盖章[）)]?\s*[：:]?\s*([^\n，,。；;]{2,80})"], text), normalize_company),
+            "公章状态": ("已检测到红色公章" if "[检测到红色公章]" in text else "", lambda x: x),
             "身份证有效期至": (_first([rf"(?:有效期限|有效期)\s*[：:]?\s*(?:{DATE}\s*[-至]\s*)?({DATE}|长期)"], text), normalize_date),
             "从事职业": (_first([r"(?:从事职业|职业工种|申报职业|职业名称)\s*[：:]?\s*([^\n\t，,。；;]{1,30})"], text), lambda x: x.strip()),
             "企业名称": (_first([r"(?:企业名称|单位名称|公司名称|用人单位|任职单位|工作单位)\s*[：:]?\s*([^\n\t，,。；;]{2,80})"], text), normalize_company),
@@ -180,5 +199,6 @@ def extract_material(material: Material) -> tuple[list[Evidence], list[WorkRecor
                 ))
         work.extend(_work_records(text, material, page_no))
         work.extend(_commitment_work_records(text, material, page_no))
+        work.extend(_work_proof_record(text, material, page_no))
     material.evidences = evidences
     return evidences, work
