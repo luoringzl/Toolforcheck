@@ -1,5 +1,5 @@
 #define MyAppName "核验工具"
-#define MyAppVersion "0.2.4"
+#define MyAppVersion "0.3.0"
 #define MyAppPublisher "离线核验工具"
 #define MyAppExeName "OfflinePersonnelVerifier.exe"
 
@@ -10,16 +10,19 @@ AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 DefaultDirName={localappdata}\Programs\核验工具
+DisableDirPage=no
+UsePreviousAppDir=no
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=dist-installer
-OutputBaseFilename=核验工具_安装包_v0.2.4
+OutputBaseFilename=核验工具_安装包_v0.3.0
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=dialog
 UninstallDisplayIcon={app}\{#MyAppExeName}
 SetupLogging=yes
 
