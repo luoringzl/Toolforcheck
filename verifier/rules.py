@@ -11,6 +11,7 @@ from .normalize import duration_months, format_year_month, month_index, normaliz
 
 HIGHER_EDUCATION = {"大专", "高职", "本科", "研究生"}
 IN_SCHOOL = {"在籍", "在校"}
+CHSI_TYPES = {"学信网学籍证明", "学信网学历证明", "学信网学位证明"}
 
 
 def _add(result: PersonResult, category: str, field: str, status: str, message: str, values: str = "", sources: str = "") -> None:
@@ -91,7 +92,11 @@ def _required_materials(result: PersonResult, materials: list[Material], form_wo
     require("身份证", True, "身份证为必交材料")
     is_higher_student = level in {"高职", "本科"} and student_status in IN_SCHOOL
     require("学历证明", not is_higher_student, "非高职、本科在校生必须提交最高学历证明")
-    require("学信网学籍证明", level in HIGHER_EDUCATION, "大专及以上人员无论在校或毕业均须提交学信网材料")
+    chsi_count = sum(len(types[kind]) for kind in CHSI_TYPES)
+    if level in HIGHER_EDUCATION and not chsi_count:
+        _add(result, "材料完整性", "学信网材料", "缺少材料", "大专及以上人员无论在校或毕业均须提交学信网材料", "应有至少1份，实有0份")
+    elif level in HIGHER_EDUCATION:
+        _add(result, "材料完整性", "学信网材料", "齐全", "已提交学信网材料", f"共{chsi_count}份")
     require("工作证明", bool(form_work), "有工作经历时，仅最后一段工作经历必须有工作证明")
     require("工作年限承诺书", len(form_work) > 1, "有2段及以上工作经历必须提交工作年限承诺书")
     # 每个不同企业均须有一份截图；同企业多段经历只要求一份。
@@ -126,7 +131,7 @@ def _compare_form_to_id(result: PersonResult, form: Material | None, identity: M
 
 
 def _education_rules(result: PersonResult, materials: list[Material], form: Material | None) -> tuple[str, str, str]:
-    higher = [m for m in materials if m.document_type == "学信网学籍证明"]
+    higher = [m for m in materials if m.document_type in CHSI_TYPES]
     diplomas = [m for m in materials if m.document_type == "学历证明"]
     authority = higher[0] if higher else (diplomas[0] if diplomas else None)
     if authority: authority.selected_as_basis = True
@@ -153,6 +158,25 @@ def _education_rules(result: PersonResult, materials: list[Material], form: Mate
         else:
             _add(result, "学习经历核对", "初中经历", "已填写", "申报表学习经历已包含初中阶段；如无证明材料，仍需人工复核校名与时间", sources=form.path.name)
     return level, status, grad
+
+
+def _commitment_rules(result: PersonResult, materials: list[Material], all_work: list[WorkRecord]) -> None:
+    commitments = [m for m in materials if m.document_type == "工作年限承诺书"]
+    if not commitments:
+        return
+    records = [w for w in all_work if w.source_type == "工作年限承诺书"]
+    fields = _by_field([e for m in commitments for e in m.evidences])
+    if not fields.get("承诺人签名"):
+        _add(result, "承诺函核对", "本人签名", "缺少信息", "工作年限承诺书未可靠识别到考生本人签名")
+    stated = int(fields["承诺工作年限"][0].normalized_value) if fields.get("承诺工作年限") else None
+    calculated = sum(duration_months(w.start, w.end) or 0 for w in records)
+    if stated is not None and records:
+        status = "一致" if stated == calculated else "人工复核"
+        _add(result, "承诺函核对", "工作年限", status, "承诺的总工作年限与逐段月份合计核对", f"声明={stated}个月；逐段合计={calculated}个月")
+    ordered = sorted(records, key=lambda w: month_index(w.start) or 0)
+    for previous, current in zip(ordered, ordered[1:]):
+        if (month_index(current.start) or 0) <= (month_index(previous.end) or -1):
+            _add(result, "承诺函核对", "工作经历重叠", "不一致", "承诺函内工作经历不能重叠；允许断档", f"{previous.company}；{current.company}")
 
 
 def _work_rules(result: PersonResult, materials: list[Material], records: list[WorkRecord], graduation: str, identity: Material | None, registry: CompanyRegistry, cfg: AppConfig) -> None:
@@ -235,6 +259,7 @@ def evaluate(person: str, materials: list[Material], evidences: list[Evidence], 
     _required_materials(result, materials, form_work, level, student_status)
     _compare_form_to_id(result, form, identity)
     _work_rules(result, materials, form_work, graduation, identity, registry, cfg)
+    _commitment_rules(result, materials, work)
 
     statuses = [f.status for f in result.findings]
     overall = "通过"
