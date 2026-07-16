@@ -12,7 +12,10 @@ HEAD_FILL = PatternFill("solid", fgColor="1F4E78")
 HEAD_FONT = Font(color="FFFFFF", bold=True)
 STATUS_FILL = {
     "通过": "C6EFCE", "一致": "C6EFCE", "待复核": "FFEB9C",
+    "齐全": "C6EFCE", "豁免": "DDEBF7", "已填写": "C6EFCE",
+    "人工复核": "FFEB9C", "无法核对": "FFEB9C", "缺少信息": "FFEB9C",
     "退回": "FFC7CE", "不一致": "FFC7CE", "不通过": "FFC7CE",
+    "缺少材料": "FFC7CE", "缺少或不一致": "FFC7CE", "材料不采用": "E7E6E6",
 }
 
 
@@ -42,22 +45,24 @@ def write_report(results: list[PersonResult], output: Path) -> None:
     wb.remove(wb.active)
     total = _sheet(wb, "人员核验总表", ["人员", "总体结果", "材料数", "退回数", "不一致数", "待复核数"])
     detail = _sheet(wb, "字段差异明细", ["人员", "类别", "字段", "状态", "说明", "字段值", "来源文件与页码"])
-    works = _sheet(wb, "工作经历明细", ["人员", "企业名称", "开始时间", "结束时间", "工作月数", "企业名称状态", "企业名称说明", "来源"])
-    mats = _sheet(wb, "材料清单", ["人员", "文件", "材料类型", "质量状态", "质量原因", "处理异常"])
+    complete = _sheet(wb, "材料完整性审核", ["人员", "材料类型", "状态", "判断依据", "数量或结果", "来源"])
+    works = _sheet(wb, "工作经历明细", ["人员", "企业名称", "从事职业", "开始时间", "结束时间", "工作月数", "企业名称状态", "企业名称说明", "经营范围", "来源"])
+    mats = _sheet(wb, "材料清单", ["人员", "文件", "材料类型", "是否核验依据", "质量状态", "质量原因", "处理异常"])
     rejects = _sheet(wb, "退回清单", ["人员", "字段/材料", "退回原因", "来源"])
     for r in results:
         s = r.summary
         total.append([r.person, s["总体结果"], s["材料数"], s["退回数"], s["不一致数"], s["待复核数"]])
         for f in r.findings:
             detail.append([f.person, f.category, f.field, f.status, f.message, f.values, f.sources])
+            if f.category == "材料完整性":
+                complete.append([f.person, f.field, f.status, f.message, f.values, f.sources])
             if f.status == "退回":
                 rejects.append([f.person, f.field, f.message, f.sources])
         for w in r.work_records:
-            works.append([w.person, w.company, w.start, w.end, w.duration_months, w.company_status, w.company_message, w.source])
+            works.append([w.person, w.company, w.occupation, w.start, w.end, w.duration_months, w.company_status, w.company_message, w.business_scope, w.source])
         for m in r.materials:
-            mats.append([m.person, m.path.name, m.document_type, m.quality_status, "；".join(m.quality_reasons), "；".join(m.errors)])
+            mats.append([m.person, m.path.name, m.document_type, "是" if m.selected_as_basis else "否", m.quality_status, "；".join(m.quality_reasons), "；".join(m.errors)])
     for ws in wb.worksheets:
         _finish(ws)
     output.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output)
-

@@ -20,13 +20,14 @@ class LocalTesseractOCR:
         self.environment = os.environ.copy()
         if tessdata.exists():
             self.environment["TESSDATA_PREFIX"] = str(tessdata)
+        self.creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         self.language = language
 
     def available(self) -> bool:
         try:
             return subprocess.run(
                 [self.command, "--version"], capture_output=True, timeout=10,
-                env=self.environment
+                env=self.environment, creationflags=self.creationflags
             ).returncode == 0
         except Exception:
             return False
@@ -40,13 +41,13 @@ class LocalTesseractOCR:
             cmd = [self.command, str(path), "stdout", "-l", langs, "--psm", "6"]
             cp = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=180,
-                env=self.environment
+                env=self.environment, creationflags=self.creationflags
             )
             if cp.returncode != 0 and "chi_sim" in langs:
                 cp = subprocess.run(
                     [self.command, str(path), "stdout", "-l", "eng", "--psm", "6"],
                     capture_output=True, text=True, timeout=180,
-                    env=self.environment
+                    env=self.environment, creationflags=self.creationflags
                 )
             if cp.returncode != 0:
                 raise RuntimeError(cp.stderr.strip() or "本地OCR执行失败")

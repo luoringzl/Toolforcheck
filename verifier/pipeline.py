@@ -32,8 +32,7 @@ def run(input_dir: Path, output: Path, registry_path: str | None = None, cfg: Ap
         for m in materials:
             e, w = extract_material(m)
             evidences.extend(e); works.extend(w)
-        results.append(evaluate(folder.name, materials, evidences, works, registry))
+        results.append(evaluate(folder.name, materials, evidences, works, registry, cfg))
     write_report(results, output)
     log(f"完成：{output}")
     return results
-

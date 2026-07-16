@@ -27,6 +27,7 @@ class Material:
     quality_reasons: list[str] = field(default_factory=list)
     evidences: list[Evidence] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    selected_as_basis: bool = False
 
 
 @dataclass
@@ -50,6 +51,9 @@ class WorkRecord:
     source: str
     company_status: str = ""
     company_message: str = ""
+    occupation: str = ""
+    business_scope: str = ""
+    source_type: str = ""
 
 
 @dataclass
@@ -59,4 +63,3 @@ class PersonResult:
     findings: list[Finding] = field(default_factory=list)
     work_records: list[WorkRecord] = field(default_factory=list)
     summary: dict[str, Any] = field(default_factory=dict)
-

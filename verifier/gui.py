@@ -11,7 +11,7 @@ from .pipeline import run
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("离线人事材料批量核验工具")
+        self.title("核验工具")
         self.geometry("820x560")
         self.minsize(720, 480)
         self.input_var = tk.StringVar()
@@ -28,7 +28,7 @@ class App(tk.Tk):
         frame = ttk.Frame(self, padding=20)
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(1, weight=1)
-        ttk.Label(frame, text="完全离线 · 文件不会上传", font=("Microsoft YaHei UI", 16, "bold")).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 15))
+        ttk.Label(frame, text="核验工具 · 完全离线 · 文件不会上传", font=("Microsoft YaHei UI", 16, "bold")).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 15))
         self._row(frame, "人员总文件夹（内含姓名文件夹）", self.input_var, self._input, 1)
         self._row(frame, "Excel输出位置", self.output_var, self._output, 2)
         self._row(frame, "企业全称名录（可选）", self.registry_var, self._registry, 3)

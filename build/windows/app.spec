@@ -44,5 +44,5 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name="离线人事材料批量核验工具",
+    name="核验工具",
 )

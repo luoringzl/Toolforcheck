@@ -7,7 +7,7 @@ from .pipeline import run
 
 
 def main():
-    p = argparse.ArgumentParser(description="完全离线的人事材料批量核验工具")
+    p = argparse.ArgumentParser(description="核验工具：完全离线的人事材料批量核验")
     p.add_argument("input", type=Path, help="人员总文件夹")
     p.add_argument("--output", type=Path, default=Path("核验报告.xlsx"))
     p.add_argument("--company-registry", default=None, help="本地工商企业全称名录 CSV/XLSX")
@@ -17,4 +17,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
