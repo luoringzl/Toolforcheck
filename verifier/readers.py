@@ -11,7 +11,7 @@ from PIL import Image, ImageOps
 from .config import AppConfig
 from .models import Material
 from .ocr import LocalTesseractOCR
-from .quality import assess_id_image
+from .quality import assess_id_image, has_red_stamp
 
 
 def classify_document(path: Path) -> str:
@@ -130,6 +130,16 @@ def read_material(person: str, path: Path, cfg: AppConfig, ocr: LocalTesseractOC
         if m.quality_reasons:
             m.quality_status = "退回"
         m.document_type = refine_document_type(m.document_type, "\n".join(m.text_pages))
+        if m.document_type == "工作证明" and suffix in {".pdf", ".jpg", ".jpeg", ".png"}:
+            stamp_found = False
+            if suffix == ".pdf":
+                doc = fitz.open(path)
+                stamp_found = any(has_red_stamp(_render_pdf_page(page, 140)) for page in doc)
+            else:
+                stamp_found = has_red_stamp(ImageOps.exif_transpose(Image.open(path)).convert("RGB"))
+            if stamp_found:
+                if not m.text_pages: m.text_pages = [""]
+                m.text_pages[0] += "\n[检测到红色公章]"
         if not any(x.strip() for x in m.text_pages) and not m.quality_reasons:
             m.errors.append("未提取到可用文字")
     except Exception as exc:
