@@ -254,6 +254,11 @@ def evaluate(person: str, materials: list[Material], evidences: list[Evidence], 
     for material in materials:
         for error in material.errors:
             _add(result, "处理异常", "文件读取", "待复核", error, sources=material.path.name)
+        if material.document_type == "证件照":
+            if material.quality_status == "合格":
+                _add(result, "材料质量", "证件照", "通过", "证件照为二寸比例的半身彩色照片；无需提取文字", sources=material.path.name)
+            else:
+                _add(result, "材料质量", "证件照", "退回", "证件照不符合要求：" + "；".join(material.quality_reasons), sources=material.path.name)
 
     identity = _select_valid_id(materials, result)
     forms = [m for m in materials if m.document_type == "申报表"]
