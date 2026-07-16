@@ -18,7 +18,7 @@ def run(input_dir: Path, output: Path, registry_path: str | None = None, cfg: Ap
     log = progress or (lambda _: None)
     ocr = LocalTesseractOCR(cfg.ocr_language)
     if not ocr.available():
-        raise RuntimeError("未检测到本地 Tesseract OCR，请安装后重试")
+        raise RuntimeError("未能加载离线RapidOCR模型，请重新安装核验工具")
     registry = CompanyRegistry(registry_path)
     people = sorted(p for p in input_dir.iterdir() if p.is_dir())
     if not people:
