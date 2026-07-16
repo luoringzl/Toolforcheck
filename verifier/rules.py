@@ -98,9 +98,11 @@ def _required_materials(result: PersonResult, materials: list[Material], form_wo
 
     def require(kind: str, condition: bool, reason: str, quantity: int = 1) -> None:
         if condition and len(types[kind]) < quantity:
-            _add(result, "材料完整性", kind, "缺少材料", f"缺少{kind}。触发条件：{reason}", f"应有{quantity}份，实有{len(types[kind])}份")
+            _add(result, "材料完整性", kind, "缺少材料", f"缺少{kind}。触发条件：{reason}", f"应有{quantity}份，实有{len(types[kind])}份", "；".join(m.path.name for m in types[kind]))
         elif condition:
-            _add(result, "材料完整性", kind, "齐全", reason, f"共{len(types[kind])}份")
+            _add(result, "材料完整性", kind, "齐全", reason, f"共{len(types[kind])}份", "；".join(m.path.name for m in types[kind]))
+        else:
+            _add(result, "材料完整性", kind, "不适用", f"当前人员情况未触发：{reason}", f"实有{len(types[kind])}份", "；".join(m.path.name for m in types[kind]))
 
     require("申报表", True, "《福建省职业技能等级认定申报表》为必交材料")
     if types["申报表"] and not any("福建省职业技能等级认定申报表" in "".join(m.text_pages).replace(" ", "") for m in types["申报表"]):
@@ -114,11 +116,18 @@ def _required_materials(result: PersonResult, materials: list[Material], form_wo
         _add(result, "材料完整性", "学信网材料", "缺少材料", "大专及以上人员无论在校或毕业均须提交学信网材料", "应有至少1份，实有0份")
     elif level in HIGHER_EDUCATION:
         _add(result, "材料完整性", "学信网材料", "齐全", "已提交学信网材料", f"共{chsi_count}份")
-    require("工作证明", bool(form_work), "有工作经历时，仅最后一段工作经历必须有工作证明")
+    else:
+        _add(result, "材料完整性", "学信网材料", "不适用", "当前识别学历未达到大专及以上，未触发学信网材料要求", f"实有{chsi_count}份")
+    inferred_has_work = bool(form_work or types["工作证明"] or types["企业信息截图"])
+    if inferred_has_work:
+        for kind in ("工作证明", "企业信息截图"):
+            for material in types[kind]:
+                material.selected_as_basis = True
+    require("工作证明", inferred_has_work, "有工作经历时，仅最后一段工作经历必须有工作证明")
     require("工作年限承诺书", len(form_work) > 1, "有2段及以上工作经历必须提交工作年限承诺书")
     # 每个不同企业均须有一份截图；同企业多段经历只要求一份。
     companies = {normalize_company(w.company) for w in form_work if w.company}
-    require("企业信息截图", bool(companies), "每个工作经历企业均须提交企业信息截图", len(companies))
+    require("企业信息截图", inferred_has_work, "每个工作经历企业均须提交企业信息截图", max(1, len(companies)))
 
 
 def _compare_form_to_id(result: PersonResult, form: Material | None, identity: Material | None) -> None:
@@ -234,6 +243,8 @@ def _work_rules(result: PersonResult, materials: list[Material], records: list[W
     if ordered:
         latest = ordered[-1]
         proofs = [m for m in materials if m.document_type == "工作证明"]
+        for proof in proofs:
+            proof.selected_as_basis = True
         proof_companies = {
             e.normalized_value for m in proofs for e in m.evidences
             if e.field in {"企业名称", "出具单位"}
@@ -305,6 +316,13 @@ def _work_rules(result: PersonResult, materials: list[Material], records: list[W
     for record in records:
         if record.company not in screenshot_companies:
             _add(result, "企业信息核对", "企业信息截图", "缺少或不一致", "未找到与该段工作经历企业全称完全一致的企业信息截图", record.company, record.source)
+        else:
+            for material in materials:
+                if material.document_type == "企业信息截图" and any(
+                    e.field == "企业名称" and e.normalized_value == record.company
+                    for e in material.evidences
+                ):
+                    material.selected_as_basis = True
         occupation = record.occupation
         if occupation and any(word in occupation for word in cfg.functional_positions):
             _add(result, "经营范围核对", "从事职业", "豁免", "职能类岗位不受企业经营范围限制", occupation, record.source)
@@ -335,13 +353,14 @@ def evaluate(person: str, materials: list[Material], evidences: list[Evidence], 
     form = forms[0] if forms else None
     if form: form.selected_as_basis = True
     form_work = [w for w in work if w.source_type == "申报表"]
+    proof_work = [w for w in work if w.source_type == "工作证明"]
     if form and not form_work:
         form_text = "\n".join(form.text_pages)
         if re.search(r"(?:19|20)\d{2}\s*年\s*\d{1,2}\s*月.{0,40}(?:至|到)", form_text, re.S):
             _add(result, "工作经历核对", "工作经历解析", "待复核", "申报表疑似填写了工作经历，但未能转换为结构化记录，请人工复核", sources=form.path.name)
-    if not form_work:
-        form_work = [w for w in work if w.source_type not in {"企业信息截图", "工作证明"}]
-    result.work_records = form_work
+    result.work_records = form_work if form_work else proof_work
+    if form and not form_work and (proof_work or any(m.document_type == "企业信息截图" for m in materials)):
+        _add(result, "工作经历核对", "申报表工作经历", "缺少信息", "已提交工作证明或企业信息截图，但未从申报表读取到完整工作经历；不能仅用辅助材料替代申报表记录", sources=form.path.name)
     level, student_status, graduation = _education_rules(result, materials, form)
     if not level:
         _add(result, "学历信息", "学历层次", "人工复核", "未能从现有材料可靠判断学历层次，学信网材料要求需人工复核")
