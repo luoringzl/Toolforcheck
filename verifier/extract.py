@@ -81,6 +81,7 @@ def _person_name(text: str, expected_person: str) -> str:
     patterns = [
         r"(?:姓名|学生)\s*[：:]?\s*([\u4e00-\u9fff·]{2,4})(?=\s*(?:性别|民族|出生|，|,|$))",
         r"(?:姓名|学生)\s*[：:]?\s*([\u4e00-\u9fff·]{2,4})",
+        r"兹有(?:我单位)?\s*([\u4e00-\u9fff·]{2,4})(?=\s*[（(，,])",
     ]
     for pattern in patterns:
         for value in re.findall(pattern, text):
@@ -304,7 +305,8 @@ def extract_material(material: Material) -> tuple[list[Evidence], list[WorkRecor
             if raw:
                 evidences.append(Evidence(
                     material.person, material.path.name, page_no,
-                    material.document_type, field, raw, normalizer(raw)
+                    material.document_type, field, raw, normalizer(raw),
+                    confidence=material.ocr_confidence,
                 ))
         form_records = _form_table_work_records(text, material, page_no)
         work.extend(form_records)
