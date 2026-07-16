@@ -139,10 +139,7 @@ def _education_rules(result: PersonResult, materials: list[Material], form: Mate
     level = fields.get("学历层次", [None])[0].normalized_value if fields.get("学历层次") else ""
     status = fields.get("学籍状态", [None])[0].normalized_value if fields.get("学籍状态") else ""
     grad = fields.get("毕业时间", [None])[0].normalized_value if fields.get("毕业时间") else ""
-    if form:
-        form_fields = _by_field(form.evidences)
-        if not level and form_fields.get("学历层次"): level = form_fields["学历层次"][0].normalized_value
-        if not status and form_fields.get("学籍状态"): status = form_fields["学籍状态"][0].normalized_value
+    # 不能从申报表空白栏目标题（如“高职/本科”）推断实际学历层次。
     if form and authority:
         form_fields = _by_field(form.evidences)
         for field in ("毕业院校", "毕业时间"):
