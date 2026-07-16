@@ -83,3 +83,41 @@ def red_stamp_ratio(image: Image.Image) -> float:
 def has_red_stamp(image: Image.Image) -> bool:
     # 工作证明中公章通常占页面面积的0.1%以上；阈值保守，结果只表示检测到红章区域。
     return red_stamp_ratio(image) >= 0.001
+
+
+def assess_id_photo(image: Image.Image) -> list[str]:
+    """检查证件照是否为近似二寸、竖版、彩色半身照；不做文字识别。"""
+    reasons: list[str] = []
+    rgb = np.asarray(image.convert("RGB"), dtype=np.uint8)
+    h, w = rgb.shape[:2]
+    ratio = w / max(1, h)
+    if h <= w or not 0.62 <= ratio <= 0.82:
+        reasons.append(f"证件照应为二寸竖版比例（当前宽高比 {ratio:.2f}）")
+    # 彩色照片三个通道必须存在可感知差异；灰度或黑白扫描件会接近0。
+    channel_spread = np.mean(np.max(rgb, axis=2).astype(np.float32) - np.min(rgb, axis=2))
+    if channel_spread < 4.0:
+        reasons.append("证件照应为半身彩色照片，当前图片接近黑白或灰度")
+
+    # 用OpenCV随包自带的人脸分类器确认画面中有正面人物，且人脸占比符合半身照。
+    try:
+        import cv2
+
+        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+        cascade = cv2.CascadeClassifier(
+            str(Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml")
+        )
+        faces = cascade.detectMultiScale(
+            gray, scaleFactor=1.1, minNeighbors=4,
+            minSize=(max(24, w // 10), max(24, h // 10)),
+        )
+        if len(faces) == 0:
+            reasons.append("未检测到符合证件照要求的正面人像，请确认是半身正面照片")
+        else:
+            _, y, fw, fh = max(faces, key=lambda item: item[2] * item[3])
+            face_ratio = (fw * fh) / max(1, w * h)
+            if not 0.025 <= face_ratio <= 0.38 or y > h * 0.48:
+                reasons.append("人像构图不符合二寸半身证件照要求")
+    except Exception:
+        # 人脸组件不可用时仍执行尺寸、比例和彩色检查，不把证件照送入OCR。
+        pass
+    return reasons
