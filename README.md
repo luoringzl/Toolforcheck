@@ -6,7 +6,7 @@
 
 - 直接读取用户已经建立好的人员姓名一级子文件夹；不创建档案、不分组、不移动或重命名文件
 - DOCX 正文/表格、电子 PDF 文本直接提取
-- 扫描 PDF 和图片使用本机 Tesseract OCR（不调用网络）
+- 扫描 PDF 和图片优先使用本机 RapidOCR（中文检测+方向分类+识别），Tesseract 作为兜底及方向检测，全程不调用云服务
 - 身份证图像质量门禁：模糊、强反光、严重旋转、尺寸不足时退回
 - 身份证号码格式、出生日期、性别顺序码校验
 - 姓名、出生日期、毕业院校、毕业时间、证书编号提取
@@ -32,7 +32,7 @@
 ## Windows源码运行
 
 1. 安装 Python 3.11 或 3.12（安装时勾选 Add Python to PATH）。
-2. 安装 Tesseract OCR，并安装 `chi_sim` 简体中文语言包。
+2. 源码运行建议安装 Tesseract OCR 及 `chi_sim` 语言包作为兜底；RapidOCR 和中文 ONNX 模型由依赖自动安装。
 3. 在本目录执行：
 
 ```powershell
@@ -83,7 +83,7 @@ py -m verifier.cli "D:\待审核人员" --output "D:\核验报告.xlsx" --compan
 
 ## Windows安装包构建
 
-正式安装包将Python运行环境、Tesseract OCR、简体中文和方向检测模型全部打包，不要求使用者另装Python或OCR。Windows构建机执行：
+正式安装包将Python运行环境、RapidOCR、ONNX中文模型、Tesseract OCR、简体中文和方向检测模型全部打包，不要求使用者另装Python或OCR。Windows构建机执行：
 
 ```powershell
 .\build\windows\build.ps1
