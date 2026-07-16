@@ -44,5 +44,5 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name="核验工具",
+    name="OfflinePersonnelVerifier",
 )
