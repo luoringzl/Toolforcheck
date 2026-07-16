@@ -6,11 +6,15 @@
 
 - 直接读取用户已经建立好的人员姓名一级子文件夹；不创建档案、不分组、不移动或重命名文件
 - DOCX 正文/表格、电子 PDF 文本直接提取
-- 扫描 PDF 和材料图片优先使用本机 RapidOCR；二寸证件照只检查竖版比例、彩色及半身正面构图，不进行文字识别
+- 扫描 PDF 和材料图片使用本机 RapidOCR；二寸证件照只检查竖版比例、彩色及半身正面构图，不进行文字识别
 - 身份证图像质量门禁：模糊、强反光、严重旋转、尺寸不足时退回
 - 身份证号码格式、出生日期、性别顺序码校验
 - 加强身份证及申报表姓名/身份证号、毕业证校名/毕业时间/证书编号提取，并读取Word浮动文本框
 - 逐行读取申报表工作经历表格：企业全称、职业、起止时间、证明人姓名和电话，并与工作证明、企业信息截图联动核验
+- 企业经营范围按每段工作对应的同一企业截图逐一核验，不跨企业借用经营范围
+- 多份学历材料按最高层次、学信网优先、字段完整度和识别置信度择优；同层次冲突转人工复核
+- 多份身份证出现不同有效号码时停止自动择优；关键OCR字段低置信度进入人工复核清单
+- 输出“人工复核清单”和“字段识别依据”，保留字段值、置信度、文件及页码
 - 企业简称硬性退回；可导入本地工商企业全称名录进行严格匹配
 - 输出人员总表、字段差异、工作经历、材料清单、退回清单、运行日志
 - 所有处理均在本机完成
@@ -32,18 +36,11 @@
 ## Windows源码运行
 
 1. 安装 Python 3.11 或 3.12（安装时勾选 Add Python to PATH）。
-2. 源码运行建议安装 Tesseract OCR 及 `chi_sim` 语言包作为兜底；RapidOCR 和中文 ONNX 模型由依赖自动安装。
+2. RapidOCR、中文 ONNX 模型和OpenCV由依赖自动安装，无需另装OCR软件。
 3. 在本目录执行：
 
 ```powershell
 py -m pip install -r requirements.txt
-py app.py
-```
-
-如 Tesseract 不在 PATH，可设置环境变量：
-
-```powershell
-$env:TESSERACT_CMD="C:\Program Files\Tesseract-OCR\tesseract.exe"
 py app.py
 ```
 
@@ -83,7 +80,7 @@ py -m verifier.cli "D:\待审核人员" --output "D:\核验报告.xlsx" --compan
 
 ## Windows安装包构建
 
-正式安装包将Python运行环境、RapidOCR、ONNX中文模型、Tesseract OCR、简体中文和方向检测模型全部打包，不要求使用者另装Python或OCR。Windows构建机执行：
+正式安装包将Python运行环境、RapidOCR、ONNX中文模型及无界面OpenCV运行库全部打包，不要求使用者另装Python或OCR。冗余的Tesseract及语言模型已移除，并仅收集实际使用的ONNX后端。Windows构建机执行：
 
 ```powershell
 .\build\windows\build.ps1
