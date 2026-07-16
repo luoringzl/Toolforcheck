@@ -28,6 +28,7 @@ class Material:
     evidences: list[Evidence] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     selected_as_basis: bool = False
+    ocr_confidence: float | None = None
 
 
 @dataclass
