@@ -33,6 +33,13 @@ class RuleTests(unittest.TestCase):
         level = next(e.normalized_value for e in evidences if e.field == "学历层次")
         self.assertEqual(level, "初中")
 
+    def test_company_registry_screenshot_recognition(self):
+        company_page = "企业名称 福州德鲁伊文化传媒有限公司 统一社会信用代码 91350100MABQNX33XG 经营状态 注销 成立日期 2022-06-16 登记机关 福州市市场监督管理局 经营范围 文艺创作；软件开发"
+        sole_trader_page = "工商信息 名称 福州市鼓楼区美日甜甜品店 经营者 蔡艺萱 登记状态 存续 统一社会信用代码 92350102MABXEFRX6L 企业类型 个体工商户 登记机关 福州市鼓楼区市场监督管理局 经营范围 餐饮服务；食品销售"
+        self.assertEqual(classify_document(Path("22.png")), "其他材料")
+        self.assertEqual(refine_document_type("其他材料", company_page), "企业信息截图")
+        self.assertEqual(refine_document_type("其他材料", sole_trader_page), "企业信息截图")
+
     def test_dates_chinese_and_duration(self):
         self.assertEqual(normalize_date("2020年3月"), "2020-03")
         self.assertEqual(normalize_date("二〇二〇年七月"), "2020-07")
