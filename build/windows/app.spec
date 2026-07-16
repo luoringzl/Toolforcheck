@@ -1,19 +1,30 @@
 # -*- mode: python ; coding: utf-8 -*-
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_all
 
 project = Path(SPECPATH).parent.parent
 tesseract = project / "build" / "windows" / "vendor" / "tesseract"
 
 datas = []
+binaries = []
+hiddenimports = ["tkinter", "fitz", "docx", "openpyxl", "PIL", "numpy"]
 if tesseract.exists():
     datas.append((str(tesseract), "tesseract"))
+
+# RapidOCR的ONNX模型和onnxruntime本机动态库必须随安装包复制，
+# 否则源码环境可用、打包后会退化为“未提取到可用文字”。
+for package in ("rapidocr", "onnxruntime"):
+    package_datas, package_binaries, package_hidden = collect_all(package)
+    datas += package_datas
+    binaries += package_binaries
+    hiddenimports += package_hidden
 
 a = Analysis(
     [str(project / "app.py")],
     pathex=[str(project)],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
-    hiddenimports=["tkinter", "fitz", "docx", "openpyxl", "PIL", "numpy"],
+    hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
     excludes=["pytest", "matplotlib", "pandas"],
