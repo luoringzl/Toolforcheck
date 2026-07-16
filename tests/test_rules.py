@@ -1,5 +1,7 @@
 import unittest
+import tempfile
 from pathlib import Path
+from docx import Document
 
 from verifier.company import CompanyRegistry
 from verifier.config import AppConfig
@@ -7,7 +9,7 @@ from verifier.idcard import birthday_from_id, validate_cn_id
 from verifier.models import Evidence, Material, WorkRecord
 from verifier.normalize import duration_months, format_year_month, normalize_date
 from verifier.rules import evaluate
-from verifier.readers import classify_document, refine_document_type
+from verifier.readers import classify_document, refine_document_type, _docx_pages
 from verifier.extract import extract_material
 from verifier.quality import has_red_stamp
 from verifier.quality import assess_id_photo
@@ -26,6 +28,36 @@ def evidence(person, filename, kind, field, raw, normalized=None):
 
 
 class RuleTests(unittest.TestCase):
+    def test_docx_work_table_preserves_rows_and_cells(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "测试申报表.docx"
+            doc = Document()
+            table = doc.add_table(rows=3, cols=4)
+            headers = ["工作经历", "从事何职业", "所在单位", "证明人姓名、电话"]
+            for index, value in enumerate(headers):
+                table.rows[0].cells[index].text = value
+            values = ["2023年2月至2024年6月", "物业电工", "闽清金鑫物业管理有限公司", "黄先生 15959179257"]
+            for index, value in enumerate(values):
+                table.rows[1].cells[index].text = value
+            values = ["2024年7月至今", "物业电工", "闽清金鑫物业管理有限公司", "林先生 13800138000"]
+            for index, value in enumerate(values):
+                table.rows[2].cells[index].text = value
+            doc.save(path)
+            form = Material("测试", path, "申报表")
+            form.text_pages = _docx_pages(path)
+            _, records = extract_material(form)
+            self.assertEqual(len(records), 2)
+            self.assertEqual(records[0].company, "闽清金鑫物业管理有限公司")
+            self.assertEqual(records[1].end, "至今")
+
+    def test_all_eight_material_types_appear_in_completeness(self):
+        result = evaluate("测试", [], [], [], CompanyRegistry())
+        fields = {f.field: f.status for f in result.findings if f.category == "材料完整性"}
+        expected = {"申报表", "证件照", "身份证", "学历证明", "工作证明", "学信网材料", "工作年限承诺书", "企业信息截图"}
+        self.assertTrue(expected.issubset(fields))
+        self.assertEqual(fields["工作证明"], "不适用")
+        self.assertEqual(fields["企业信息截图"], "不适用")
+
     def test_higher_education_material_is_selected(self):
         person = "测试人员"
         high = material(person, "高中毕业证.jpg", "学历证明", [
@@ -200,13 +232,16 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(duration_months("2020-03", "2021-02"), 12)
 
     def test_form_labels_are_not_values(self):
-        text = "福建省职业技能等级认定申报表\n姓名\t陈俊顺\t性别\t男\n最高学历\t初中/中职/高中\t毕业院校\n学习经历\t初中\t高职/本科"
+        text = "福建省职业技能等级认定申报表\n姓名\t陈俊顺\t性别\t男\n最高学历\t初中/中职/高中\t毕业院校\n申报职业\t申报等级\t现工作单位\n工作经历\t从事何职业\t所在单位\t证明人姓名、电话\n学习经历\t初中\t高职/本科"
         m = Material("陈俊顺", Path("陈俊顺申报表.docx"), "申报表")
         m.text_pages = [text]
         evidences, _ = extract_material(m)
         fields = {e.field: e.normalized_value for e in evidences}
         self.assertEqual(fields.get("姓名"), "陈俊顺")
         self.assertNotIn("学历层次", fields)
+        self.assertNotIn("企业名称", fields)
+        self.assertNotIn("证明人姓名", fields)
+        self.assertNotIn("从事职业", fields)
 
     def test_id_validation(self):
         ok, reasons = validate_cn_id("11010519491231002X")
