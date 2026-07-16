@@ -9,6 +9,8 @@ from verifier.normalize import duration_months, format_year_month, normalize_dat
 from verifier.rules import evaluate
 from verifier.readers import classify_document, refine_document_type
 from verifier.extract import extract_material
+from verifier.quality import has_red_stamp
+from PIL import Image, ImageDraw
 
 
 def material(person, filename, kind, evidences=()):
@@ -80,6 +82,20 @@ class RuleTests(unittest.TestCase):
         fields = {e.field: e.normalized_value for e in evidences}
         self.assertEqual(fields["承诺工作年限"], "60")
         self.assertEqual(fields["承诺人签名"], "彭思敏")
+
+    def test_work_proof_and_stamp_detection(self):
+        text = "工作证明\n兹有我单位 陈俊顺，身份证号码：350181200810080357\n自 2025 年 1 月至今，在我单位从事物业电工相关行业工作。\n部门联系人：黄先生\n联系电话：15959179257\n单位（盖章）：闽清金鑫物业管理有限公司"
+        m = Material("陈俊顺", Path("工作证明.docx"), "工作证明")
+        m.text_pages = [text]
+        evidences, records = extract_material(m)
+        fields = {e.field: e.normalized_value for e in evidences}
+        self.assertEqual(fields["证明人姓名"], "黄先生")
+        self.assertEqual(fields["证明人电话"], "15959179257")
+        self.assertEqual(fields["出具单位"], "闽清金鑫物业管理有限公司")
+        self.assertEqual(records[0].end, "至今")
+        image = Image.new("RGB", (1000, 1400), "white")
+        ImageDraw.Draw(image).ellipse((650, 950, 930, 1230), outline=(210, 0, 0), width=35)
+        self.assertTrue(has_red_stamp(image))
 
     def test_dates_chinese_and_duration(self):
         self.assertEqual(normalize_date("2020年3月"), "2020-03")
