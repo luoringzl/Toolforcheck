@@ -90,16 +90,26 @@ def _docx_pages(path: Path) -> list[str]:
     parts = [p.text for p in doc.paragraphs if p.text.strip()]
     for table in doc.tables:
         for row in table.rows:
-            parts.append("\t".join(re.sub(r"[\r\n]+", " ", cell.text).strip() for cell in row.cells))
+            cells = []
+            seen_cells = set()
+            for cell in row.cells:
+                # 合并单元格会由python-docx重复返回，避免重复污染列位置。
+                cell_key = id(cell._tc)
+                if cell_key in seen_cells:
+                    continue
+                seen_cells.add(cell_key)
+                # cell.text不包含浮动文本框；从单元格XML读取全部w:t，
+                # 同时保留每个表格行和单元格的边界。
+                texts = [
+                    node.text for node in cell._tc.iter()
+                    if node.tag.endswith("}t") and node.text
+                ]
+                cells.append(re.sub(r"[\r\n]+", " ", "".join(texts)).strip())
+            if any(cells):
+                parts.append("\t".join(cells))
     for section in doc.sections:
         parts.extend(p.text for p in section.header.paragraphs if p.text.strip())
         parts.extend(p.text for p in section.footer.paragraphs if p.text.strip())
-    # 申报表常把姓名、身份证号码放在浮动文本框中，python-docx的
-    # paragraphs/tables不会返回这些内容；从底层XML补取全部w:t节点。
-    xml_text = [node.text.strip() for node in doc.element.iter()
-                if node.tag.endswith("}t") and node.text and node.text.strip()]
-    if xml_text:
-        parts.append("\t".join(xml_text))
     return ["\n".join(parts)]
 
 
