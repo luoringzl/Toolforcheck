@@ -10,6 +10,7 @@ from verifier.rules import evaluate
 from verifier.readers import classify_document, refine_document_type
 from verifier.extract import extract_material
 from verifier.quality import has_red_stamp
+from verifier.quality import assess_id_photo
 from verifier.ocr import _extract_rapid_text
 from PIL import Image, ImageDraw
 
@@ -25,6 +26,29 @@ def evidence(person, filename, kind, field, raw, normalized=None):
 
 
 class RuleTests(unittest.TestCase):
+    def test_identity_form_and_school_field_extraction(self):
+        identity = Material("李锴铄", Path("李锴铄身份证.pdf"), "身份证")
+        identity.text_pages = ["姓名 李锴铄 性别 男 民族 汉 出生 2009年2月24日\n公民身份号码 350123200902241234"]
+        identity_fields = {e.field: e.normalized_value for e in extract_material(identity)[0]}
+        self.assertEqual(identity_fields["姓名"], "李锴铄")
+
+        form = Material("李锴铄", Path("李锴铄申报表.docx"), "申报表")
+        form.text_pages = ["福建省职业技能等级认定申报表\n姓名\t李锴铄\t身份证号码\t350123200902241234"]
+        form_fields = {e.field: e.normalized_value for e in extract_material(form)[0]}
+        self.assertEqual(form_fields["姓名"], "李锴铄")
+        self.assertEqual(form_fields["身份证号"], "350123200902241234")
+
+        diploma = Material("李锴铄", Path("李锴铄学历.jpg"), "学历证明")
+        diploma.text_pages = ["学生 李锴铄，于二〇二一年九月至二〇二四年六月在本校初中部学习。\n学校：平潭翰英中学 校长：某某\n（初）毕字（24）第11380081号"]
+        diploma_fields = {e.field: e.normalized_value for e in extract_material(diploma)[0]}
+        self.assertEqual(diploma_fields["毕业院校"], "平潭翰英中学")
+
+    def test_color_portrait_does_not_require_ocr(self):
+        image = Image.new("RGB", (413, 579), (70, 120, 180))
+        # 没有人脸时可以报告构图问题，但不能产生“未提取到文字”。
+        reasons = assess_id_photo(image)
+        self.assertFalse(any("文字" in reason for reason in reasons))
+
     def test_rapidocr_output_adapter(self):
         class Output:
             txts = ["教育部学籍在线验证报告", "学校名称 福建农业职业技术学院", ""]
