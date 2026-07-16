@@ -11,7 +11,7 @@ from PIL import Image, ImageOps
 from .config import AppConfig
 from .models import Material
 from .ocr import LocalTesseractOCR
-from .quality import assess_id_image, has_red_stamp
+from .quality import assess_id_image, assess_id_photo, has_red_stamp
 
 
 def classify_document(path: Path) -> str:
@@ -94,6 +94,12 @@ def _docx_pages(path: Path) -> list[str]:
     for section in doc.sections:
         parts.extend(p.text for p in section.header.paragraphs if p.text.strip())
         parts.extend(p.text for p in section.footer.paragraphs if p.text.strip())
+    # 申报表常把姓名、身份证号码放在浮动文本框中，python-docx的
+    # paragraphs/tables不会返回这些内容；从底层XML补取全部w:t节点。
+    xml_text = [node.text.strip() for node in doc.element.iter()
+                if node.tag.endswith("}t") and node.text and node.text.strip()]
+    if xml_text:
+        parts.append("\t".join(xml_text))
     return ["\n".join(parts)]
 
 
@@ -125,7 +131,9 @@ def read_material(person: str, path: Path, cfg: AppConfig, ocr: LocalTesseractOC
             image = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
             if kind == "身份证":
                 m.quality_reasons = assess_id_image(image, cfg.quality, ocr.command, ocr.environment)
-            if not m.quality_reasons:
+            elif kind == "证件照":
+                m.quality_reasons = assess_id_photo(image)
+            if not m.quality_reasons and kind != "证件照":
                 m.text_pages = [ocr.recognize(image)]
         if m.quality_reasons:
             m.quality_status = "退回"
@@ -140,7 +148,9 @@ def read_material(person: str, path: Path, cfg: AppConfig, ocr: LocalTesseractOC
             if stamp_found:
                 if not m.text_pages: m.text_pages = [""]
                 m.text_pages[0] += "\n[检测到红色公章]"
-        if not any(x.strip() for x in m.text_pages) and not m.quality_reasons:
+        if (m.document_type != "证件照"
+                and not any(x.strip() for x in m.text_pages)
+                and not m.quality_reasons):
             m.errors.append("未提取到可用文字")
     except Exception as exc:
         m.errors.append(str(exc))
