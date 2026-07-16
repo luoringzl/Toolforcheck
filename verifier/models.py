@@ -54,6 +54,8 @@ class WorkRecord:
     occupation: str = ""
     business_scope: str = ""
     source_type: str = ""
+    witness_name: str = ""
+    witness_phone: str = ""
 
 
 @dataclass
