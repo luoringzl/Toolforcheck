@@ -42,18 +42,19 @@ class LocalTesseractOCR:
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "page.png"
             image.save(path)
-            langs = self.language
-            cmd = [self.command, str(path), "stdout", "-l", langs, "--psm", "6"]
-            cp = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=180,
-                env=self.environment, creationflags=self.creationflags
-            )
-            if cp.returncode != 0 and "chi_sim" in langs:
-                cp = subprocess.run(
-                    [self.command, str(path), "stdout", "-l", "eng", "--psm", "6"],
+            def execute(language: str, psm: str):
+                return subprocess.run(
+                    [self.command, str(path), "stdout", "-l", language, "--psm", psm],
                     capture_output=True, text=True, timeout=180,
                     env=self.environment, creationflags=self.creationflags
                 )
+            cp = execute(self.language, "6")
+            if cp.returncode != 0 and "chi_sim" in self.language:
+                cp = execute("eng", "6")
             if cp.returncode != 0:
-                raise RuntimeError(cp.stderr.strip() or "本地OCR执行失败")
-            return cp.stdout.strip()
+                raise RuntimeError((cp.stderr or "").strip() or "本地OCR执行失败")
+            primary = (cp.stdout or "").strip()
+            # 证书、表格和印章附近经常是稀疏文字，再用PSM 11补充一次。
+            sparse_cp = execute(self.language, "11")
+            sparse = (sparse_cp.stdout or "").strip() if sparse_cp.returncode == 0 else ""
+            return "\n".join(part for part in (primary, sparse) if part)
