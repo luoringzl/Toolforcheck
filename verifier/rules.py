@@ -157,6 +157,8 @@ def _education_rules(result: PersonResult, materials: list[Material], form: Mate
             _add(result, "学习经历核对", "初中经历", "缺少信息", "申报表学习经历必须从初中开始填写", sources=form.path.name)
         else:
             _add(result, "学习经历核对", "初中经历", "已填写", "申报表学习经历已包含初中阶段；如无证明材料，仍需人工复核校名与时间", sources=form.path.name)
+    if authority and authority.document_type == "学历证明" and level and level != "初中" and not fields.get("毕业证编码"):
+        _add(result, "学历信息", "毕业证编码", "缺少信息", "除初中学历外，最高学历证明存在编码时应填写；未可靠识别到毕业证编码", sources=authority.path.name)
     return level, status, grad
 
 
@@ -204,6 +206,17 @@ def _work_rules(result: PersonResult, materials: list[Material], records: list[W
             _add(result, "工作证明核对", "最后一份工作", "人工复核", "已提交工作证明，但未可靠读取到企业全称，需人工确认其对应最后一段工作经历", latest.company, latest.source)
         else:
             _add(result, "工作证明核对", "最后一份工作", "一致", "最后一段工作经历已有对应工作证明", latest.company, latest.source)
+        for proof in proofs:
+            proof_fields = _by_field(proof.evidences)
+            if not proof_fields.get("证明人姓名") or not proof_fields.get("证明人电话"):
+                _add(result, "工作证明核对", "证明人及电话", "缺少信息", "工作证明必须填写证明人姓名和联系电话", sources=proof.path.name)
+            sealed = bool(proof_fields.get("公章状态"))
+            if cfg.audit_mode == "正式审核" and not sealed:
+                _add(result, "工作证明核对", "单位公章", "缺少材料", "正式审核的工作证明必须加盖单位公章", sources=proof.path.name)
+            elif cfg.audit_mode == "预审" and not sealed:
+                _add(result, "工作证明核对", "单位公章", "人工复核", "预审阶段允许暂未盖章；正式提交时必须加盖单位公章", sources=proof.path.name)
+            elif sealed:
+                _add(result, "工作证明核对", "单位公章", "已检测", "检测到红色公章；圆形公章文字低置信度时仍需人工复核", sources=proof.path.name)
     for previous, current in zip(ordered, ordered[1:]):
         previous_end = month_index(previous.end) if previous.end != "至今" else 999999
         current_start = month_index(current.start)
