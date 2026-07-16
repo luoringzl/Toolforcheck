@@ -1,5 +1,5 @@
 #define MyAppName "核验工具"
-#define MyAppVersion "0.5.2"
+#define MyAppVersion "0.6.0"
 #define MyAppPublisher "离线核验工具"
 #define MyAppExeName "OfflinePersonnelVerifier.exe"
 
@@ -15,7 +15,7 @@ UsePreviousAppDir=no
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=dist-installer
-OutputBaseFilename=核验工具_安装包_v0.5.2
+OutputBaseFilename=核验工具_安装包_v0.6.0
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
@@ -40,27 +40,3 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "启动{#MyAppName}"; Flags: nowait postinstall skipifsilent
-
-[Code]
-function ContainsNonAscii(const Value: String): Boolean;
-var
-  I: Integer;
-begin
-  Result := False;
-  for I := 1 to Length(Value) do
-    if Ord(Value[I]) > 127 then
-    begin
-      Result := True;
-      Exit;
-    end;
-end;
-
-function NextButtonClick(CurPageID: Integer): Boolean;
-begin
-  Result := True;
-  if (CurPageID = wpSelectDir) and ContainsNonAscii(WizardDirValue) then
-  begin
-    MsgBox('由于本地OCR组件限制，安装路径不能包含中文或其他非英文字符。请选择纯英文路径。', mbError, MB_OK);
-    Result := False;
-  end;
-end;
