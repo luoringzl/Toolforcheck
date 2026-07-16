@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import subprocess
-import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -36,28 +34,33 @@ def glare_metrics(image: Image.Image) -> tuple[float, float]:
     return ratio, largest / max(1, bright.shape[1])
 
 
-def detect_rotation(image: Image.Image, tesseract_cmd: str, environment: dict[str, str] | None = None) -> float | None:
+def detect_rotation(image: Image.Image) -> float | None:
+    """使用OpenCV直线角度估计轻微倾斜，不依赖Tesseract方向模型。"""
     try:
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-            tmp = Path(f.name)
-        image.save(tmp)
-        cp = subprocess.run(
-            [tesseract_cmd, str(tmp), "stdout", "--psm", "0"],
-            capture_output=True, text=True, timeout=20, env=environment,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        import cv2
+
+        gray = np.asarray(image.convert("L"), dtype=np.uint8)
+        edges = cv2.Canny(gray, 60, 180)
+        lines = cv2.HoughLinesP(
+            edges, 1, np.pi / 180, threshold=max(60, gray.shape[1] // 8),
+            minLineLength=max(80, gray.shape[1] // 5), maxLineGap=20,
         )
-        for line in (cp.stdout or "").splitlines():
-            if line.startswith("Rotate:"):
-                return float(line.split(":", 1)[1].strip())
+        if lines is None:
+            return None
+        angles = []
+        for x1, y1, x2, y2 in lines[:, 0]:
+            angle = float(np.degrees(np.arctan2(y2 - y1, x2 - x1)))
+            while angle > 45:
+                angle -= 90
+            while angle < -45:
+                angle += 90
+            angles.append(angle)
+        return abs(float(np.median(angles))) if angles else None
     except Exception:
         return None
-    finally:
-        if 'tmp' in locals():
-            tmp.unlink(missing_ok=True)
-    return None
 
 
-def assess_id_image(image: Image.Image, cfg: QualityConfig, tesseract_cmd: str, environment: dict[str, str] | None = None) -> list[str]:
+def assess_id_image(image: Image.Image, cfg: QualityConfig) -> list[str]:
     reasons: list[str] = []
     w, h = image.size
     if max(w, h) < cfg.min_width or min(w, h) < cfg.min_height:
@@ -68,8 +71,10 @@ def assess_id_image(image: Image.Image, cfg: QualityConfig, tesseract_cmd: str, 
     glare, region = glare_metrics(image)
     if glare > cfg.glare_ratio_max or region > cfg.glare_largest_region_ratio_max:
         reasons.append("图片存在严重反光")
-    rotation = detect_rotation(image, tesseract_cmd, environment)
-    if rotation is not None and min(rotation, abs(360 - rotation)) > cfg.severe_rotation_degrees:
+    if h > w * 1.12:
+        reasons.append("图片疑似旋转90°，身份证应保持横向")
+    rotation = detect_rotation(image)
+    if rotation is not None and rotation > cfg.severe_rotation_degrees:
         reasons.append(f"图片严重倾斜或旋转（约 {rotation:.0f}°）")
     return reasons
 
