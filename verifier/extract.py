@@ -7,7 +7,7 @@ from .models import Evidence, Material, WorkRecord
 from .normalize import normalize_company, normalize_date, normalize_id, normalize_name
 
 ARABIC_DATE = r"(?:19\d{2}|20\d{2})[年./\-]\d{1,2}(?:(?:月(?:\d{1,2}日?)?)|(?:[./\-]\d{1,2}日?))?"
-CHINESE_DATE = r"[〇零一二三四五六七八九]{4}年[一二三四五六七八九十]{1,3}月(?:[一二三四五六七八九十]{1,3}日)?"
+CHINESE_DATE = r"[〇○O零一二三四五六七八九]{4}年[一二三四五六七八九十]{1,3}月(?:[一二三四五六七八九十]{1,3}日)?"
 DATE = rf"(?:{ARABIC_DATE}|{CHINESE_DATE})"
 
 
@@ -64,6 +64,16 @@ def _education_form(text: str) -> str:
         ("中等职业教育", ("中等职业学校", "中等专业学校", "职业高中", "职业中学", "技工学校", "技师学院")),
     ]
     return next((label for label, markers in forms if any(marker in compact for marker in markers)), "")
+
+
+def _person_name(text: str, expected_person: str) -> str:
+    rejected = {"姓名", "性别", "出生年月", "身份证号", "联系电话", "学生"}
+    matches = re.findall(r"(?:姓名|学生)\s*[：:]?\s*([\u4e00-\u9fff·]{2,8})", text)
+    for value in matches:
+        value = value.strip()
+        if value not in rejected:
+            return value
+    return expected_person if expected_person and expected_person in re.sub(r"\s", "", text) else ""
 
 
 def _work_records(text: str, material: Material, page_no: int) -> list[WorkRecord]:
@@ -149,14 +159,14 @@ def extract_material(material: Material) -> tuple[list[Evidence], list[WorkRecor
             continue
         id_number = _best_id(text)
         candidates = {
-            "姓名": (_first([r"姓名\s*[：:]?\s*([\u4e00-\u9fff·]{2,8})", r"姓\s*名\s*([\u4e00-\u9fff·]{2,8})"], text), normalize_name),
+            "姓名": (_person_name(text, material.person), normalize_name),
             "性别": (_first([r"性别\s*[：:]?\s*([男女])"], text), lambda x: x),
             "身份证号": (id_number, normalize_id),
             "出生日期": (_first([rf"(?:出生日期|出生年月|出生)\s*[：:]?\s*({DATE})"], text), normalize_date),
             "毕业院校": (_first([r"(?:毕业院校|毕业学校|院校名称|学校名称|高等院校|校名|学校)\s*[：:]?\s*([^\n\t，,。]{2,50}(?:大学|学院|学校|中学|中专|职高))", r"([\u4e00-\u9fff]{2,30}(?:大学|学院|学校|中学|中专|职高))"], text), lambda x: x.strip()),
             "毕业证编码": (_first([r"(?:毕业证书编号|学历证书编号|毕业证编号|毕业证号|证书编号)\s*[：:]?\s*([A-Za-z0-9\-]{6,40})", r"[（(](?:初|高)[）)]毕字[^号\n]{0,20}第?\s*([A-Za-z0-9\-]{6,40})\s*号"], text), lambda x: re.sub(r"\s", "", x).upper()),
             "学位证编码": (_first([r"(?:学位证书编号|学位证编号)\s*[：:]?\s*([A-Za-z0-9\-]{6,40})"], text), lambda x: re.sub(r"\s", "", x).upper()),
-            "学历层次": (_education_level(text), lambda x: x),
+            "学历层次": ("" if material.document_type == "申报表" else _education_level(text), lambda x: x),
             "学历形式": (_education_form(text), lambda x: x),
             "学籍状态": (_first([r"(?:学籍状态|状态)\s*[：:]?\s*(在籍|在校|保留学籍|休学|离籍|毕业|结业)"], text), lambda x: x),
             "预计毕业时间": (_first([rf"预计毕业日期\s*[：:]?\s*({DATE})"], text), normalize_date),
