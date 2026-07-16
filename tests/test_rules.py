@@ -10,6 +10,7 @@ from verifier.rules import evaluate
 from verifier.readers import classify_document, refine_document_type
 from verifier.extract import extract_material
 from verifier.quality import has_red_stamp
+from verifier.ocr import _extract_rapid_text
 from PIL import Image, ImageDraw
 
 
@@ -24,6 +25,17 @@ def evidence(person, filename, kind, field, raw, normalized=None):
 
 
 class RuleTests(unittest.TestCase):
+    def test_rapidocr_output_adapter(self):
+        class Output:
+            txts = ["教育部学籍在线验证报告", "学校名称 福建农业职业技术学院", ""]
+            scores = [0.99, 0.91, 0.80]
+
+        text = _extract_rapid_text(Output())
+        self.assertIn("学籍在线验证报告", text)
+        self.assertIn("福建农业职业技术学院", text)
+        legacy = ([[[0, 0], "毕业证书", 0.98], [[0, 0], "低置信噪声", 0.1]], 0.2)
+        self.assertEqual(_extract_rapid_text(legacy), "毕业证书")
+
     def test_junior_high_diploma_recognition(self):
         self.assertEqual(classify_document(Path("陈俊顺学历.jpg")), "学历证明")
         self.assertEqual(classify_document(Path("黄苗可毕业证书.jpg")), "学历证明")
