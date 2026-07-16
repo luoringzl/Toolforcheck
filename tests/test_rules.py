@@ -7,6 +7,8 @@ from verifier.idcard import birthday_from_id, validate_cn_id
 from verifier.models import Evidence, Material, WorkRecord
 from verifier.normalize import duration_months, format_year_month, normalize_date
 from verifier.rules import evaluate
+from verifier.readers import classify_document, refine_document_type
+from verifier.extract import extract_material
 
 
 def material(person, filename, kind, evidences=()):
@@ -20,6 +22,17 @@ def evidence(person, filename, kind, field, raw, normalized=None):
 
 
 class RuleTests(unittest.TestCase):
+    def test_junior_high_diploma_recognition(self):
+        self.assertEqual(classify_document(Path("陈俊顺学历.jpg")), "学历证明")
+        self.assertEqual(classify_document(Path("黄苗可毕业证书.jpg")), "学历证明")
+        ocr_text = "学生 陈俊顺，于二〇二一年九月至二〇二四年七月 在本校初中部学习，学制叁年，修业期满，成绩合格，准予毕业。（初）毕字（24）第08150197号 二〇二四年七月十五日"
+        self.assertEqual(refine_document_type("其他材料", ocr_text), "学历证明")
+        diploma = Material("陈俊顺", Path("材料1.jpg"), refine_document_type("其他材料", ocr_text))
+        diploma.text_pages = [ocr_text]
+        evidences, _ = extract_material(diploma)
+        level = next(e.normalized_value for e in evidences if e.field == "学历层次")
+        self.assertEqual(level, "初中")
+
     def test_dates_chinese_and_duration(self):
         self.assertEqual(normalize_date("2020年3月"), "2020-03")
         self.assertEqual(normalize_date("二〇二〇年七月"), "2020-07")
