@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date
+import re
 
 from .company import CompanyRegistry
 from .config import AppConfig
@@ -187,6 +188,8 @@ def _work_rules(result: PersonResult, materials: list[Material], records: list[W
             _add(result, "企业名称", "企业全称", company_status, company_message, record.company, record.source)
         if record.end != "至今" and record.duration_months is None:
             _add(result, "时间逻辑", "工作起止时间", "不一致", "工作结束时间早于开始时间或日期无法识别", f"{format_year_month(record.start)}-{format_year_month(record.end)}", record.source)
+        if record.source_type == "申报表" and (not record.witness_name or not record.witness_phone):
+            _add(result, "工作经历核对", "证明人姓名、电话", "缺少信息", "申报表每段工作经历必须填写证明人姓名和电话", f"企业={record.company}；证明人={record.witness_name}；电话={record.witness_phone}", record.source)
 
     ordered = sorted([r for r in records if month_index(r.start) is not None], key=lambda r: month_index(r.start) or 0)
     if ordered:
@@ -265,6 +268,10 @@ def evaluate(person: str, materials: list[Material], evidences: list[Evidence], 
     form = forms[0] if forms else None
     if form: form.selected_as_basis = True
     form_work = [w for w in work if w.source_type == "申报表"]
+    if form and not form_work:
+        form_text = "\n".join(form.text_pages)
+        if re.search(r"(?:19|20)\d{2}\s*年\s*\d{1,2}\s*月.{0,40}(?:至|到)", form_text, re.S):
+            _add(result, "工作经历核对", "工作经历解析", "待复核", "申报表疑似填写了工作经历，但未能转换为结构化记录，请人工复核", sources=form.path.name)
     if not form_work:
         form_work = [w for w in work if w.source_type not in {"企业信息截图", "工作证明"}]
     result.work_records = form_work
