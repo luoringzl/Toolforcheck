@@ -72,3 +72,14 @@ def assess_id_image(image: Image.Image, cfg: QualityConfig, tesseract_cmd: str, 
     if rotation is not None and min(rotation, abs(360 - rotation)) > cfg.severe_rotation_degrees:
         reasons.append(f"图片严重倾斜或旋转（约 {rotation:.0f}°）")
     return reasons
+
+
+def red_stamp_ratio(image: Image.Image) -> float:
+    rgb = np.asarray(image.convert("RGB"), dtype=np.float32)
+    red = (rgb[:, :, 0] > 120) & (rgb[:, :, 0] > rgb[:, :, 1] * 1.30) & (rgb[:, :, 0] > rgb[:, :, 2] * 1.30)
+    return float(red.mean())
+
+
+def has_red_stamp(image: Image.Image) -> bool:
+    # 工作证明中公章通常占页面面积的0.1%以上；阈值保守，结果只表示检测到红章区域。
+    return red_stamp_ratio(image) >= 0.001
