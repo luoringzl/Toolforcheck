@@ -32,6 +32,10 @@ def _material_evidence(material: Material, field: str) -> list[Evidence]:
     return [e for e in material.evidences if e.field == field]
 
 
+def _usable_material(material: Material) -> bool:
+    return material.quality_status == "合格" and not material.errors
+
+
 def _id_expiry(material: Material) -> int:
     expiry = _material_evidence(material, "身份证有效期至")
     if not expiry:
@@ -97,10 +101,18 @@ def _required_materials(result: PersonResult, materials: list[Material], form_wo
         types[material.document_type].append(material)
 
     def require(kind: str, condition: bool, reason: str, quantity: int = 1) -> None:
-        if condition and len(types[kind]) < quantity:
-            _add(result, "材料完整性", kind, "缺少材料", f"缺少{kind}。触发条件：{reason}", f"应有{quantity}份，实有{len(types[kind])}份", "；".join(m.path.name for m in types[kind]))
+        qualified = [m for m in types[kind] if _usable_material(m)]
+        if kind == "身份证":
+            # 身份证必须有可组合使用的清晰正反面；选择结果由_select_valid_id标记。
+            qualified = [m for m in qualified if m.selected_as_basis]
+        if condition and len(qualified) < quantity:
+            _add(result, "材料完整性", kind, "缺少材料", f"缺少合格的{kind}。触发条件：{reason}", f"应有{quantity}份合格材料，实有{len(types[kind])}份、合格{len(qualified)}份", "；".join(m.path.name for m in types[kind]))
         elif condition:
-            _add(result, "材料完整性", kind, "齐全", reason, f"共{len(types[kind])}份", "；".join(m.path.name for m in types[kind]))
+            already_selected = [m for m in qualified if m.selected_as_basis]
+            if not already_selected:
+                for material in sorted(qualified, key=lambda m: m.ocr_confidence or 0, reverse=True)[:quantity]:
+                    material.selected_as_basis = True
+            _add(result, "材料完整性", kind, "齐全", reason + "；同类多份时至少一份合格即判定齐全", f"实有{len(types[kind])}份、合格{len(qualified)}份", "；".join(m.path.name for m in qualified))
         else:
             _add(result, "材料完整性", kind, "不适用", f"当前人员情况未触发：{reason}", f"实有{len(types[kind])}份", "；".join(m.path.name for m in types[kind]))
 
@@ -115,17 +127,25 @@ def _required_materials(result: PersonResult, materials: list[Material], form_wo
         not is_higher_student,
         "大专及以上在籍/在校人员以学信网学籍材料为依据，无需提交毕业证；已毕业人员须提交最高学历毕业证",
     )
-    chsi_count = sum(len(types[kind]) for kind in CHSI_TYPES)
+    chsi_materials = [m for kind in CHSI_TYPES for m in types[kind] if _usable_material(m)]
+    chsi_count = len(chsi_materials)
     if level in HIGHER_EDUCATION and not chsi_count:
         _add(result, "材料完整性", "学信网材料", "缺少材料", "大专及以上人员无论在校或毕业均须提交学信网材料", "应有至少1份，实有0份")
     elif level in HIGHER_EDUCATION:
+        for material in chsi_materials:
+            material.selected_as_basis = True
         _add(result, "材料完整性", "学信网材料", "齐全", "已提交学信网材料", f"共{chsi_count}份")
     else:
         _add(result, "材料完整性", "学信网材料", "不适用", "当前识别学历未达到大专及以上，未触发学信网材料要求", f"实有{chsi_count}份")
-    inferred_has_work = bool(form_work or types["工作证明"] or types["企业信息截图"])
+    graduated = bool(level) and student_status not in IN_SCHOOL
+    if graduated and not form_work:
+        _add(result, "申报表填写核验", "工作经历", "缺少信息", "只有未毕业的在籍/在校人员允许工作经历为空；已毕业人员至少填写一段完整工作经历")
+    usable_proofs = [m for m in types["工作证明"] if _usable_material(m)]
+    usable_screenshots = [m for m in types["企业信息截图"] if _usable_material(m)]
+    inferred_has_work = bool(form_work or graduated or usable_proofs or usable_screenshots)
     if inferred_has_work:
-        for kind in ("工作证明", "企业信息截图"):
-            for material in types[kind]:
+        for group in (usable_proofs, usable_screenshots):
+            for material in group:
                 material.selected_as_basis = True
     require("工作证明", inferred_has_work, "有工作经历时，仅最后一段工作经历必须有工作证明")
     require("工作年限承诺书", len(form_work) > 1, "有2段及以上工作经历必须提交工作年限承诺书")
@@ -161,8 +181,8 @@ def _compare_form_to_id(result: PersonResult, form: Material | None, identity: M
 
 
 def _education_rules(result: PersonResult, materials: list[Material], form: Material | None) -> tuple[str, str, str]:
-    higher = [m for m in materials if m.document_type in CHSI_TYPES]
-    diplomas = [m for m in materials if m.document_type == "学历证明"]
+    higher = [m for m in materials if m.document_type in CHSI_TYPES and _usable_material(m)]
+    diplomas = [m for m in materials if m.document_type == "学历证明" and _usable_material(m)]
     candidates = higher + diplomas
 
     def education_score(material: Material) -> tuple[int, int, int, float]:
@@ -248,7 +268,7 @@ def _commitment_rules(result: PersonResult, materials: list[Material], all_work:
 
 def _work_rules(result: PersonResult, materials: list[Material], records: list[WorkRecord], all_records: list[WorkRecord], graduation: str, identity: Material | None, registry: CompanyRegistry, cfg: AppConfig) -> None:
     for record in records:
-        record.duration_months = None if record.end == "至今" else duration_months(record.start, record.end)
+        record.duration_months = duration_months(record.start, record.end)
         company_status, company_message = registry.validate(record.company)
         record.company_status, record.company_message = company_status, company_message
         if company_status != "通过":
@@ -260,14 +280,27 @@ def _work_rules(result: PersonResult, materials: list[Material], records: list[W
 
     ordered = sorted([r for r in records if month_index(r.start) is not None], key=lambda r: month_index(r.start) or 0)
     if ordered:
+        total_months = sum(record.duration_months or 0 for record in ordered)
+        years, months = divmod(total_months, 12)
+        _add(result, "工作经历核对", "累计工作年限", "已计算", "按申报表各段工作经历逐月累计；工作经历不得重叠，允许断档，至今按当前月份计算", f"{years}年{months}个月（共{total_months}个月）", "；".join(record.source for record in ordered))
+        forms = [m for m in materials if m.document_type == "申报表" and _usable_material(m)]
+        stated_values = _by_field(forms[0].evidences).get("从事本职业年限", []) if forms else []
+        if stated_values:
+            stated_months = int(stated_values[0].normalized_value)
+            status = "一致" if stated_months == total_months else "人工复核"
+            _add(result, "工作经历核对", "从事本职业年限", status, "申报表填写的从事本职业年限与各段工作月份合计核对", f"申报表={stated_months // 12}年；逐段合计={years}年{months}个月", forms[0].path.name)
+        else:
+            _add(result, "工作经历核对", "从事本职业年限", "缺少信息", "申报表有工作经历时必须填写从事本职业年限")
+    if ordered:
         latest = ordered[-1]
-        proofs = [m for m in materials if m.document_type == "工作证明"]
+        proofs = [m for m in materials if m.document_type == "工作证明" and _usable_material(m)]
         for proof in proofs:
             proof.selected_as_basis = True
+        proof_records = [record for record in all_records if record.source_type == "工作证明"]
         proof_companies = {
             e.normalized_value for m in proofs for e in m.evidences
             if e.field in {"企业名称", "出具单位"}
-        }
+        } | {record.company for record in proof_records if record.company}
         if not proofs:
             pass  # 材料完整性规则已报告缺失。
         elif proof_companies and latest.company not in proof_companies:
@@ -296,8 +329,12 @@ def _work_rules(result: PersonResult, materials: list[Material], records: list[W
                         _add(result, "工作证明核对", field, "缺少信息", f"工作证明未可靠读取到{field}", sources=proof.path.name)
                     elif expected and actual != expected:
                         _add(result, "工作证明核对", field, "不一致", f"工作证明{field}与身份证不一致", f"工作证明={actual}；身份证={expected}", proof.path.name)
-        proof_records = [record for record in all_records if record.source_type == "工作证明"]
+            stated_proof = proof_fields.get("证明工作年限", [])
+            if not stated_proof:
+                _add(result, "工作证明核对", "工作年限", "缺少信息", "工作证明须按“自×年×月至今，在××企业从事××职位×年”填写工作年限", sources=proof.path.name)
         matching_proofs = [record for record in proof_records if record.company == latest.company]
+        if proofs and not matching_proofs:
+            _add(result, "工作证明核对", "规范工作陈述", "缺少信息", "未从工作证明可靠读取到“自×年×月至今，在××企业从事××职位×年”的完整陈述", sources="；".join(m.path.name for m in proofs))
         for proof_record in matching_proofs:
             if proof_record.start and latest.start and proof_record.start != latest.start:
                 _add(result, "工作证明核对", "工作开始时间", "不一致", "工作证明开始时间与最后一段工作经历不一致", f"申报表={format_year_month(latest.start)}；工作证明={format_year_month(proof_record.start)}", proof_record.source)
@@ -305,6 +342,15 @@ def _work_rules(result: PersonResult, materials: list[Material], records: list[W
                 _add(result, "工作证明核对", "工作结束时间", "不一致", "工作证明结束时间与最后一段工作经历不一致", f"申报表={format_year_month(latest.end)}；工作证明={format_year_month(proof_record.end)}", proof_record.source)
             if proof_record.occupation and latest.occupation and proof_record.occupation != latest.occupation:
                 _add(result, "工作证明核对", "从事职业", "人工复核", "工作证明岗位与申报表最后一段岗位文字不完全一致，请确认是否为同一职业", f"申报表={latest.occupation}；工作证明={proof_record.occupation}", proof_record.source)
+            proof_material = next((m for m in proofs if m.path.name in proof_record.source), None)
+            proof_fields = _by_field(proof_material.evidences) if proof_material else {}
+            stated = proof_fields.get("证明工作年限", [])
+            calculated = duration_months(proof_record.start, proof_record.end)
+            if stated and calculated is not None:
+                stated_months = int(stated[0].normalized_value)
+                # “工作×年”按完整周年填写，月份不足一年部分允许省略。
+                status = "一致" if stated_months // 12 == calculated // 12 else "不一致"
+                _add(result, "工作证明核对", "工作年限", status, "工作证明填写年限与证明中的起止月份核对", f"填写={stated_months // 12}年；计算={calculated // 12}年{calculated % 12}个月", proof_record.source)
     for previous, current in zip(ordered, ordered[1:]):
         previous_end = month_index(previous.end) if previous.end != "至今" else 999999
         current_start = month_index(current.start)
@@ -324,7 +370,7 @@ def _work_rules(result: PersonResult, materials: list[Material], records: list[W
 
     company_scopes: dict[str, list[str]] = defaultdict(list)
     for material in materials:
-        if material.document_type != "企业信息截图":
+        if material.document_type != "企业信息截图" or not _usable_material(material):
             continue
         fields = _by_field(material.evidences)
         companies = [e.normalized_value for e in fields.get("企业名称", [])]
@@ -336,6 +382,8 @@ def _work_rules(result: PersonResult, materials: list[Material], records: list[W
         if record.company not in screenshot_companies:
             _add(result, "企业信息核对", "企业信息截图", "缺少或不一致", "未找到与该段工作经历企业全称完全一致的企业信息截图", record.company, record.source)
         else:
+            record.company_status = "通过"
+            record.company_message = "与企业信息截图中的工商登记名称完全一致"
             for material in materials:
                 if material.document_type == "企业信息截图" and any(
                     e.field == "企业名称" and e.normalized_value == record.company
@@ -355,21 +403,28 @@ def _work_rules(result: PersonResult, materials: list[Material], records: list[W
 def evaluate(person: str, materials: list[Material], evidences: list[Evidence], work: list[WorkRecord], registry: CompanyRegistry, cfg: AppConfig | None = None) -> PersonResult:
     cfg = cfg or AppConfig()
     result = PersonResult(person=person, materials=materials)
+    usable_types = {
+        material.document_type for material in materials if _usable_material(material)
+    }
+    good_photos = [m for m in materials if m.document_type == "证件照" and _usable_material(m)]
     for material in materials:
         for error in material.errors:
-            _add(result, "处理异常", "文件读取", "待复核", error, sources=material.path.name)
+            status = "材料不采用" if material.document_type in usable_types else "待复核"
+            _add(result, "处理异常", "文件读取", status, error, sources=material.path.name)
         if material.document_type == "证件照":
-            if material.quality_status == "合格":
+            if _usable_material(material):
                 _add(result, "材料质量", "证件照", "通过", "证件照为二寸比例的半身彩色照片；无需提取文字", sources=material.path.name)
             else:
-                _add(result, "材料质量", "证件照", "退回", "证件照不符合要求：" + "；".join(material.quality_reasons), sources=material.path.name)
+                status = "材料不采用" if good_photos else "退回"
+                _add(result, "材料质量", "证件照", status, "证件照不符合要求：" + "；".join(material.quality_reasons), sources=material.path.name)
         for evidence in material.evidences:
             if evidence.field in KEY_OCR_FIELDS and evidence.confidence is not None and evidence.confidence < 0.65:
                 _add(result, "识别置信度", evidence.field, "人工复核", "关键字段OCR置信度较低，不自动据此判定不一致", f"{evidence.normalized_value}（置信度{evidence.confidence:.0%}）", f"{evidence.file} 第{evidence.page}页")
 
     identity = _select_valid_id(materials, result)
     forms = [m for m in materials if m.document_type == "申报表"]
-    form = forms[0] if forms else None
+    usable_forms = [m for m in forms if _usable_material(m)]
+    form = max(usable_forms, key=lambda m: (m.ocr_confidence or 0, len(m.evidences))) if usable_forms else (forms[0] if forms else None)
     if form: form.selected_as_basis = True
     form_work = [w for w in work if w.source_type == "申报表"]
     proof_work = [w for w in work if w.source_type == "工作证明"]
