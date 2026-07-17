@@ -159,6 +159,7 @@ def _form_table_work_records(text: str, material: Material, page_no: int) -> lis
         return []
     records: list[WorkRecord] = []
     headers = {
+        "工作经历",
         "何年何月至何年何月", "从何年何月开始", "从事何职业",
         "所在单位", "证明人姓名、电话", "证明人姓名电话",
     }
@@ -170,20 +171,19 @@ def _form_table_work_records(text: str, material: Material, page_no: int) -> lis
     period_pattern = re.compile(
         rf"({DATE})\s*(?:(至今)|(?:至|到|—|–|-|~|～)\s*({DATE}))"
     )
-    in_work_section = False
-    for line in text.splitlines():
-        raw_cells = [cell.strip(" ：:，,") for cell in line.split("\t")]
-        cells = [cell for cell in raw_cells if cell and cell not in headers]
-        compact_line = re.sub(r"\s", "", line)
-        if "工作经历" in compact_line or ("从事何职业" in compact_line and "所在单位" in compact_line):
-            in_work_section = True
-            continue
-        if not in_work_section:
-            continue
+
+    def clean_cell(value: str) -> str:
+        # Word 表格可能含手工换行、单元格结束标记和零宽字符；PDF/OCR也可能
+        # 在年月、公司名称中插入换行。这里仅清除不可见控制符，不改变汉字内容。
+        return re.sub(r"[\x00-\x1f\x7f\u200b\ufeff]+", " ", value).strip(" ：:，,")
+
+    def parse_cells(cells: list[str]) -> WorkRecord | None:
+        cells = [clean_cell(cell) for cell in cells]
+        cells = [cell for cell in cells if cell and re.sub(r"\s", "", cell) not in headers]
         period_index = None
         match = None
         consumed = 1
-        for index, cell in enumerate(cells):
+        for index in range(len(cells)):
             for width in (1, 2, 3):
                 combined = "".join(cells[index:index + width])
                 candidate = period_pattern.search(combined)
@@ -192,34 +192,41 @@ def _form_table_work_records(text: str, material: Material, page_no: int) -> lis
                     break
             if match:
                 break
-        if period_index is None:
-            continue
-        if not match:
-            continue
+        if period_index is None or not match:
+            return None
         tail = cells[period_index + consumed:]
-        company_index = next(
-            (index for index, value in enumerate(tail)
-             if value.endswith(company_suffixes)),
-            1 if len(tail) >= 2 else (0 if tail else None),
-        )
+        company_index = None
+        company_width = 1
+        company_candidates: list[tuple[int, int, str]] = []
+        for index in range(len(tail)):
+            for width in (1, 2, 3):
+                combined = re.sub(r"\s", "", "".join(tail[index:index + width]))
+                if combined.endswith(company_suffixes) and combined not in company_suffixes:
+                    company_candidates.append((index, width, combined))
+        if company_candidates:
+            # 优先完整的单个单元格；若公司名被PDF换行拆开，则采用能形成
+            # 企业全称的最短连续组合，避免把前一列“物业电工”拼进企业名。
+            company_index, company_width, _ = min(company_candidates, key=lambda item: (item[1], item[0]))
         if company_index is None:
-            continue
-        company = normalize_company(tail[company_index])
+            company_index = 1 if len(tail) >= 2 else (0 if tail else None)
+        if company_index is None:
+            return None
+        company = normalize_company("".join(tail[company_index:company_index + company_width]))
         if not company:
-            continue
+            return None
         occupation_values = [
             value for value in tail[:company_index]
             if value not in {"从事何职业", "职业", "工种", "岗位"}
         ]
         occupation = occupation_values[-1] if occupation_values else ""
-        witness_text = " ".join(tail[company_index + 1:])
+        witness_text = " ".join(tail[company_index + company_width:])
         phone_match = re.search(r"(?<!\d)(1\d{10}|0\d{2,3}-?\d{7,8})(?!\d)", witness_text)
         witness_phone = re.sub(r"\D", "", phone_match.group(1)) if phone_match else ""
         name_text = witness_text[:phone_match.start()] if phone_match else witness_text
         name_match = re.search(r"([\u4e00-\u9fff·]{2,8})(?:先生|女士)?", name_text)
         witness_name = name_match.group(1) if name_match else ""
         end_raw = match.group(2) or match.group(3)
-        records.append(WorkRecord(
+        return WorkRecord(
             person=material.person,
             company=company,
             start=normalize_date(match.group(1)),
@@ -230,7 +237,51 @@ def _form_table_work_records(text: str, material: Material, page_no: int) -> lis
             source_type="申报表",
             witness_name=witness_name,
             witness_phone=witness_phone,
-        ))
+        )
+
+    in_work_section = False
+    for line in text.splitlines():
+        raw_cells = [clean_cell(cell) for cell in line.split("\t")]
+        cells = [cell for cell in raw_cells if cell and cell not in headers]
+        compact_line = re.sub(r"\s", "", line)
+        if "工作经历" in compact_line or ("从事何职业" in compact_line and "所在单位" in compact_line):
+            in_work_section = True
+            # Word 纵向合并的“工作经历”单元格会在每一数据行中重复返回。
+            # 只有纯表头行才跳过；同一行若含时间范围，必须继续解析。
+            if not period_pattern.search(compact_line):
+                continue
+        if not in_work_section:
+            continue
+        record = parse_cells(raw_cells)
+        if record:
+            records.append(record)
+    if records:
+        return records
+
+    # PDF文本层/OCR通常不保留表格制表符，而是把一行四个单元格拆成连续行。
+    # 从“工作经历”区域开始，将连续文本作为单元格序列重新组合，并按每个时间范围分段。
+    lines = [clean_cell(line) for line in text.splitlines() if clean_cell(line)]
+    work_start = None
+    for index in range(len(lines)):
+        rolling = re.sub(r"\s", "", "".join(lines[max(0, index - 3):index + 1]))
+        if "工作经历" in rolling or ("从事何职业" in rolling and "所在单位" in rolling):
+            work_start = index + 1
+            break
+    if work_start is None:
+        return []
+    tokens: list[str] = []
+    for line in lines[work_start:]:
+        tokens.extend(clean_cell(cell) for cell in line.split("\t") if clean_cell(cell))
+    period_starts: list[int] = []
+    for index in range(len(tokens)):
+        if any(period_pattern.search("".join(tokens[index:index + width])) for width in (1, 2, 3)):
+            if not period_starts or index > period_starts[-1] + 2:
+                period_starts.append(index)
+    for position, start in enumerate(period_starts):
+        end = period_starts[position + 1] if position + 1 < len(period_starts) else len(tokens)
+        record = parse_cells(tokens[start:end])
+        if record:
+            records.append(record)
     return records
 
 
