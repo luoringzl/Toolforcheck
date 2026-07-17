@@ -247,12 +247,20 @@ def _education_rules(result: PersonResult, materials: list[Material], form: Mate
     return level, status, grad
 
 
-def _commitment_rules(result: PersonResult, materials: list[Material], all_work: list[WorkRecord]) -> None:
-    commitments = [m for m in materials if m.document_type == "工作年限承诺书"]
+def _commitment_rules(result: PersonResult, materials: list[Material], all_work: list[WorkRecord], identity: Material | None, form_work: list[WorkRecord]) -> None:
+    commitments = [m for m in materials if m.document_type == "工作年限承诺书" and _usable_material(m)]
     if not commitments:
         return
     records = [w for w in all_work if w.source_type == "工作年限承诺书"]
     fields = _by_field([e for m in commitments for e in m.evidences])
+    identity_fields = _by_field(identity.evidences) if identity else {}
+    for field in ("姓名", "身份证号"):
+        expected = identity_fields.get(field, [None])[0].normalized_value if identity_fields.get(field) else ""
+        actual = fields.get(field, [None])[0].normalized_value if fields.get(field) else ""
+        if not actual:
+            _add(result, "承诺函核对", field, "缺少信息", f"工作年限承诺书未可靠读取到{field}", sources="；".join(m.path.name for m in commitments))
+        elif expected:
+            _add(result, "承诺函核对", field, "一致" if actual == expected else "不一致", f"工作年限承诺书{field}与身份证核对", f"承诺书={actual}；身份证={expected}", "；".join(m.path.name for m in commitments))
     if not fields.get("承诺人签名"):
         _add(result, "承诺函核对", "本人签名", "缺少信息", "工作年限承诺书未可靠识别到考生本人签名")
     stated = int(fields["承诺工作年限"][0].normalized_value) if fields.get("承诺工作年限") else None
@@ -260,6 +268,25 @@ def _commitment_rules(result: PersonResult, materials: list[Material], all_work:
     if stated is not None and records:
         status = "一致" if stated == calculated else "人工复核"
         _add(result, "承诺函核对", "工作年限", status, "承诺的总工作年限与逐段月份合计核对", f"声明={stated}个月；逐段合计={calculated}个月")
+    if form_work and not records:
+        _add(result, "承诺函核对", "完整工作经历", "缺少信息", "工作年限承诺书必须填写申报表中的全部工作经历，当前未可靠读取到逐段经历", sources="；".join(m.path.name for m in commitments))
+    elif form_work:
+        form_ordered = sorted(form_work, key=lambda w: month_index(w.start) or 0)
+        commitment_ordered = sorted(records, key=lambda w: month_index(w.start) or 0)
+        _add(result, "承诺函核对", "工作经历段数", "一致" if len(form_ordered) == len(commitment_ordered) else "不一致", "工作年限承诺书必须完整填写申报表中的全部工作经历，不得只填写最后一段", f"申报表={len(form_ordered)}段；承诺书={len(commitment_ordered)}段")
+        for index, (form_record, commitment_record) in enumerate(zip(form_ordered, commitment_ordered), 1):
+            comparisons = (
+                ("开始时间", form_record.start, commitment_record.start),
+                ("结束时间", form_record.end, commitment_record.end),
+                ("企业名称", form_record.company, commitment_record.company),
+                ("从事职业", form_record.occupation, commitment_record.occupation),
+            )
+            for field, expected, actual in comparisons:
+                status = "一致" if expected and actual and expected == actual else "不一致"
+                _add(result, "承诺函核对", f"第{index}段{field}", status, "承诺书逐段工作经历与申报表核对", f"申报表={expected}；承诺书={actual}", commitment_record.source)
+        form_total = sum(duration_months(w.start, w.end) or 0 for w in form_ordered)
+        commitment_total = sum(duration_months(w.start, w.end) or 0 for w in commitment_ordered)
+        _add(result, "承诺函核对", "全部工作月份", "一致" if form_total == commitment_total else "不一致", "承诺书全部工作月份与申报表全部工作月份合计核对", f"申报表={form_total}个月；承诺书={commitment_total}个月")
     ordered = sorted(records, key=lambda w: month_index(w.start) or 0)
     for previous, current in zip(ordered, ordered[1:]):
         if (month_index(current.start) or 0) <= (month_index(previous.end) or -1):
@@ -441,7 +468,7 @@ def evaluate(person: str, materials: list[Material], evidences: list[Evidence], 
     _required_materials(result, materials, form_work, level, student_status)
     _compare_form_to_id(result, form, identity)
     _work_rules(result, materials, form_work, work, graduation, identity, registry, cfg)
-    _commitment_rules(result, materials, work)
+    _commitment_rules(result, materials, work, identity, form_work)
 
     statuses = [f.status for f in result.findings]
     overall = "通过"
