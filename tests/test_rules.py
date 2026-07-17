@@ -381,6 +381,40 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(fields["承诺工作年限"], "60")
         self.assertEqual(fields["承诺人签名"], "彭思敏")
 
+    def test_commitment_compares_all_form_work_records_and_identity(self):
+        person = "张三"
+        id_number = "11010519491231002X"
+        identity = material(person, "身份证.pdf", "身份证", [
+            evidence(person, "身份证.pdf", "身份证", "姓名", person),
+            evidence(person, "身份证.pdf", "身份证", "身份证号", id_number),
+            evidence(person, "身份证.pdf", "身份证", "身份证有效期至", "长期"),
+        ])
+        form = material(person, "申报表.pdf", "申报表")
+        commitment = material(person, "承诺书.pdf", "工作年限承诺书", [
+            evidence(person, "承诺书.pdf", "工作年限承诺书", "姓名", person),
+            evidence(person, "承诺书.pdf", "工作年限承诺书", "身份证号", id_number),
+            evidence(person, "承诺书.pdf", "工作年限承诺书", "承诺人签名", person),
+            evidence(person, "承诺书.pdf", "工作年限承诺书", "承诺工作年限", "24"),
+        ])
+        form_work = [
+            WorkRecord(person, "甲有限公司", "2020-01", "2020-12", None, "申报表 第1页", occupation="电工", source_type="申报表", witness_name="甲", witness_phone="13800138000"),
+            WorkRecord(person, "乙有限公司", "2021-01", "2021-12", None, "申报表 第1页", occupation="电工", source_type="申报表", witness_name="乙", witness_phone="13900139000"),
+        ]
+        commitment_work = [
+            WorkRecord(person, "甲有限公司", "2020-01", "2020-12", None, "承诺书 第1页", occupation="电工", source_type="工作年限承诺书"),
+            WorkRecord(person, "乙有限公司", "2021-01", "2021-12", None, "承诺书 第1页", occupation="电工", source_type="工作年限承诺书"),
+        ]
+        materials = [identity, form, commitment]
+        all_evidence = identity.evidences + commitment.evidences
+        result = evaluate(person, materials, all_evidence, form_work + commitment_work, CompanyRegistry())
+        self.assertTrue(any(f.category == "承诺函核对" and f.field == "姓名" and f.status == "一致" for f in result.findings))
+        self.assertTrue(any(f.category == "承诺函核对" and f.field == "身份证号" and f.status == "一致" for f in result.findings))
+        self.assertTrue(any(f.category == "承诺函核对" and f.field == "工作经历段数" and f.status == "一致" for f in result.findings))
+        self.assertTrue(any(f.category == "承诺函核对" and f.field == "全部工作月份" and f.status == "一致" for f in result.findings))
+
+        incomplete = evaluate(person, materials, all_evidence, form_work + commitment_work[-1:], CompanyRegistry())
+        self.assertTrue(any(f.category == "承诺函核对" and f.field == "工作经历段数" and f.status == "不一致" for f in incomplete.findings))
+
     def test_work_proof_and_stamp_detection(self):
         text = "工作证明\n兹有我单位 陈俊顺，身份证号码：350181200810080357\n自 2025 年 1 月至今，在我单位从事物业电工相关行业工作。\n部门联系人：黄先生\n联系电话：15959179257\n单位（盖章）：闽清金鑫物业管理有限公司"
         m = Material("陈俊顺", Path("工作证明.docx"), "工作证明")
