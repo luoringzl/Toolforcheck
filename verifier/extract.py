@@ -304,7 +304,7 @@ def _commitment_work_records(text: str, material: Material, page_no: int) -> lis
         if len(cells) < 2:
             continue
         period = re.sub(r"\s", "", cells[0])
-        match = re.search(r"(\d{4})年(\d{1,2})月至(\d{4})年(\d{1,2})月", period)
+        match = re.search(r"(\d{4})年(\d{1,2})月至(?:(\d{4})年(\d{1,2})月|(至今))", period)
         if not match:
             continue
         company = normalize_company(cells[1])
@@ -315,7 +315,7 @@ def _commitment_work_records(text: str, material: Material, page_no: int) -> lis
             person=material.person,
             company=company,
             start=f"{int(match.group(1)):04d}-{int(match.group(2)):02d}",
-            end=f"{int(match.group(3)):04d}-{int(match.group(4)):02d}",
+            end="至今" if match.group(5) else f"{int(match.group(3)):04d}-{int(match.group(4)):02d}",
             duration_months=None,
             source=f"{material.path.name} 第{page_no}页",
             occupation=occupation,
@@ -382,7 +382,7 @@ def extract_material(material: Material) -> tuple[list[Evidence], list[WorkRecor
                 lambda x: x.strip(),
             ),
             "申报等级": (_first([r"[（(]职业/工种[）)]\s*[_\s]*([1-5一二三四五])[_\s]*级"], text) if material.document_type in {"申报表", "工作年限承诺书"} else "", lambda x: x.strip()),
-            "承诺工作年限": (_first([r"工作共\s*(\d+)\s*年"], text), lambda x: str(int(x) * 12)),
+            "承诺工作年限": (_first([r"(?:工作)?共\s*(\d+)\s*年"], text), lambda x: str(int(x) * 12)),
             "从事本职业年限": (_first([r"从事本职业年限\s*[：:]?\s*(\d+(?:\.\d+)?)\s*年"], text) if material.document_type == "申报表" else "", lambda x: str(round(float(x) * 12))),
             "证明工作年限": (_first([
                 r"(?:工作|任职)\s*(\d+(?:\.\d+)?)\s*年",
