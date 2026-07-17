@@ -1,5 +1,5 @@
 #define MyAppName "核验工具"
-#define MyAppVersion "0.6.1"
+#define MyAppVersion "0.6.2"
 #define MyAppPublisher "离线核验工具"
 #define MyAppExeName "OfflinePersonnelVerifier.exe"
 
