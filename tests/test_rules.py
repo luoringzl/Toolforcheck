@@ -4,11 +4,12 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 from docx import Document
+from openpyxl import load_workbook
 
 from verifier.company import CompanyRegistry
 from verifier.config import AppConfig, ReviewPreset
 from verifier.idcard import birthday_from_id, validate_cn_id
-from verifier.models import Evidence, Material, WorkRecord
+from verifier.models import Evidence, Finding, Material, PersonResult, WorkRecord
 from verifier.normalize import duration_months, format_year_month, normalize_date
 from verifier.rules import evaluate
 from verifier.readers import classify_document, refine_document_type, _docx_pages, read_material
@@ -16,6 +17,7 @@ from verifier.extract import extract_material
 from verifier.quality import has_red_stamp
 from verifier.quality import assess_id_photo, assess_id_image
 from verifier.ocr import _extract_rapid_text
+from verifier.report import write_report
 from PIL import Image, ImageDraw
 
 
@@ -496,6 +498,75 @@ class RuleTests(unittest.TestCase):
         self.assertNotIn("企业名称", fields)
         self.assertNotIn("证明人姓名", fields)
         self.assertNotIn("从事职业", fields)
+
+    def test_form_highest_education_is_read_from_filled_cell(self):
+        text = "福建省职业技能等级认定申报表\n最高学历\t高职\t毕业院校\t福建农业职业技术学院\n毕业时间\t2027年6月26日"
+        form = Material("测试", Path("申报表.pdf"), "申报表")
+        form.text_pages = [text]
+        evidences, _ = extract_material(form)
+        fields = {item.field: item.normalized_value for item in evidences}
+        self.assertEqual(fields["学历层次"], "高职")
+
+    def test_expected_graduation_tolerates_split_table_text(self):
+        text = "教育部学籍在线验证报告\n预计毕业日期\n更新日期 2026年05月16日\n2027 年 06 月 26 日"
+        report = Material("测试", Path("学籍报告.pdf"), "学信网学籍证明")
+        report.text_pages = [text]
+        evidences, _ = extract_material(report)
+        fields = {item.field: item.normalized_value for item in evidences}
+        self.assertEqual(fields["预计毕业时间"], "2027-06-26")
+
+    def test_rapidocr_boxes_restore_table_rows(self):
+        class Output:
+            txts = ["最高学历", "高职", "毕业院校", "福建农业职业技术学院", "毕业时间", "2027年6月26日"]
+            scores = [0.99] * 6
+            boxes = [
+                [[0, 0], [80, 0], [80, 20], [0, 20]],
+                [[120, 0], [160, 0], [160, 20], [120, 20]],
+                [[220, 0], [300, 0], [300, 20], [220, 20]],
+                [[340, 0], [520, 0], [520, 20], [340, 20]],
+                [[0, 50], [80, 50], [80, 70], [0, 70]],
+                [[120, 50], [240, 50], [240, 70], [120, 70]],
+            ]
+
+        text = _extract_rapid_text(Output())
+        self.assertIn("最高学历\t高职\t毕业院校\t福建农业职业技术学院", text)
+        self.assertIn("毕业时间\t2027年6月26日", text)
+
+    def test_report_marks_complete_when_one_duplicate_is_usable(self):
+        good = material("测试", "身份证清晰.pdf", "身份证")
+        good.selected_as_basis = True
+        bad = material("测试", "身份证反光.jpg", "身份证")
+        bad.quality_status = "退回"
+        bad.quality_reasons = ["严重反光"]
+        findings = [
+            Finding("测试", "材料完整性", kind, "齐全", "至少一份合格")
+            for kind in ("申报表", "证件照", "身份证", "学历证明")
+        ]
+        findings.append(Finding("测试", "身份信息核对", "姓名", "一致", "申报表姓名与身份证一致", "申报表=测试；身份证=测试"))
+        result = PersonResult(
+            "测试", [good, bad], findings, [], {"总体结果": "通过"},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "报告.xlsx"
+            write_report([result], path)
+            workbook = load_workbook(path, data_only=True)
+            summary = workbook["人员核验总表"]
+            self.assertEqual(summary["C5"].value, "资料完整")
+            self.assertEqual(summary["E5"].value, "比对通过")
+            self.assertIn("身份证反光.jpg", workbook["完整性报告"]["F5"].value)
+
+    def test_report_lists_exact_missing_material(self):
+        result = PersonResult(
+            "测试", [],
+            [Finding("测试", "材料完整性", "工作证明", "缺少材料", "缺少合格的工作证明")],
+            [], {"总体结果": "退回"},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "报告.xlsx"
+            write_report([result], path)
+            summary = load_workbook(path, data_only=True)["人员核验总表"]
+            self.assertEqual(summary["C5"].value, "资料不完整")
+            self.assertEqual(summary["D5"].value, "工作证明")
 
     def test_id_validation(self):
         ok, reasons = validate_cn_id("11010519491231002X")

@@ -289,6 +289,20 @@ def _education_rules(result: PersonResult, materials: list[Material], form: Mate
     # 不能从申报表空白栏目标题（如“高职/本科”）推断实际学历层次。
     if form and authority:
         form_fields = _by_field(form.evidences)
+        form_level = form_fields.get("学历层次", [None])[0].normalized_value if form_fields.get("学历层次") else ""
+        if not form_level or not level:
+            _add(
+                result, "学习经历核对", "最高学历", "无法核对",
+                "未能同时可靠读取申报表最高学历和学历核验依据，请人工复核",
+                f"申报表={form_level}；依据={level}", f"{form.path.name}；{authority.path.name}",
+            )
+        else:
+            same_level = LEVEL_RANK.get(form_level, 0) == LEVEL_RANK.get(level, 0)
+            _add(
+                result, "学习经历核对", "最高学历", "一致" if same_level else "不一致",
+                "申报表最高学历与学历核验依据比较",
+                f"申报表={form_level}；依据={level}", f"{form.path.name}；{authority.path.name}",
+            )
         for field in ("毕业院校", "毕业时间"):
             expected = grad if field == "毕业时间" else fields.get(field, [None])[0].normalized_value if fields.get(field) else ""
             actual = form_fields.get(field, [None])[0].normalized_value if form_fields.get(field) else ""

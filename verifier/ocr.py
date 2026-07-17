@@ -3,7 +3,43 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image, ImageFilter, ImageOps
+
+
+def _rapid_lines(texts: list[Any], scores: list[Any], boxes: Any, minimum_score: float) -> str:
+    """按坐标还原OCR行和表格单元格，避免仅按引擎返回顺序串行拼接。"""
+    items = []
+    try:
+        box_values = list(boxes)
+    except TypeError:
+        box_values = []
+    for index, (text, score) in enumerate(zip(texts, scores)):
+        value = str(text or "").strip()
+        if not value or (score is not None and float(score) < minimum_score):
+            continue
+        if index >= len(box_values):
+            items.append((float(index), 0.0, 1.0, value))
+            continue
+        points = np.asarray(box_values[index], dtype=float).reshape(-1, 2)
+        top, bottom = float(points[:, 1].min()), float(points[:, 1].max())
+        left = float(points[:, 0].min())
+        items.append(((top + bottom) / 2, left, max(1.0, bottom - top), value))
+    if not items:
+        return ""
+    lines: list[list[tuple[float, float, float, str]]] = []
+    for item in sorted(items, key=lambda value: (value[0], value[1])):
+        for line in lines:
+            center = sum(value[0] for value in line) / len(line)
+            tolerance = max(8.0, 0.65 * max(item[2], max(value[2] for value in line)))
+            if abs(item[0] - center) <= tolerance:
+                line.append(item)
+                break
+        else:
+            lines.append([item])
+    rendered = []
+    for line in sorted(lines, key=lambda values: min(value[0] for value in values)):
+        rendered.append("\t".join(value[3] for value in sorted(line, key=lambda value: value[1])))
+    return "\n".join(rendered)
 
 
 def _extract_rapid_text(result: Any, minimum_score: float = 0.30) -> str:
@@ -14,8 +50,12 @@ def _extract_rapid_text(result: Any, minimum_score: float = 0.30) -> str:
     texts = getattr(result, "txts", None)
     scores = getattr(result, "scores", None)
     if texts is not None:
-        values = []
+        texts = list(texts)
         scores = list(scores) if scores is not None else [1.0] * len(texts)
+        boxes = getattr(result, "boxes", None)
+        if boxes is not None:
+            return _rapid_lines(texts, scores, boxes, minimum_score)
+        values = []
         for text, score in zip(texts, scores):
             value = str(text or "").strip()
             if value and (score is None or float(score) >= minimum_score):
@@ -82,6 +122,14 @@ class LocalTesseractOCR:
 
     def recognize(self, image: Image.Image) -> str:
         image = ImageOps.exif_transpose(image).convert("RGB")
+        image = ImageOps.autocontrast(image, cutoff=1)
+        if max(image.size) < 1800:
+            scale = min(2.2, 1800 / max(image.size))
+            image = image.resize(
+                (max(1, round(image.width * scale)), max(1, round(image.height * scale))),
+                Image.Resampling.LANCZOS,
+            )
+        image = image.filter(ImageFilter.UnsharpMask(radius=1.2, percent=125, threshold=3))
         self.last_confidence = None
         best_text = ""
         best_confidence: float | None = None
@@ -95,6 +143,14 @@ class LocalTesseractOCR:
                 score = (len("".join(candidate_text.split())), candidate_confidence or 0.0)
                 best_score = (len("".join(best_text.split())), best_confidence or 0.0)
                 if score > best_score:
+                    best_text, best_confidence = candidate_text, candidate_confidence
+            if len("".join(best_text.split())) < 12:
+                fallback = ImageOps.autocontrast(ImageOps.grayscale(image), cutoff=2).convert("RGB")
+                candidate_text = self._recognize_rapid(fallback)
+                candidate_confidence = self.last_confidence
+                if (len("".join(candidate_text.split())), candidate_confidence or 0.0) > (
+                    len("".join(best_text.split())), best_confidence or 0.0
+                ):
                     best_text, best_confidence = candidate_text, candidate_confidence
             self.last_confidence = best_confidence
             if len("".join(best_text.split())) >= 2:

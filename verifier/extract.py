@@ -29,6 +29,13 @@ def _labelled_date(text: str, labels: tuple[str, ...], max_gap: int = 100) -> st
     return _first([pattern], text, re.S)
 
 
+def _expected_graduation_date(text: str) -> str:
+    # 学信网报告页眉含“更新日期”。PDF文本层或OCR乱序时它可能落在
+    # “预计毕业日期”标签之后，必须先排除，避免误取报告更新日。
+    cleaned = re.sub(rf"更新日期\s*[：:]?\s*{DATE}", "", text)
+    return _labelled_date(cleaned, ("预计毕业日期", "预计毕业时间"), max_gap=80)
+
+
 def _best_id(text: str) -> str:
     labelled = re.findall(r"(?:公民身份号码|身份证(?:号码|号)?)\s*[：:]?\s*([0-9Xx\s]{18,28})", text)
     compact = re.sub(r"\s", "", text)
@@ -63,6 +70,28 @@ def _education_level(text: str) -> str:
         if level in text:
             return {"博士研究生":"研究生", "硕士研究生":"研究生", "硕士":"研究生", "博士":"研究生", "专科":"大专", "中专":"中职"}.get(level, level)
     return ""
+
+
+def _form_education_level(text: str) -> str:
+    """只读取申报表“最高学历”值，拒绝把模板栏目标题当作已填写内容。"""
+    compact = re.sub(r"[\s　]+", "", text)
+    match = re.search(r"最高学历[：:]?(.{0,28})", compact)
+    if not match:
+        return ""
+    segment = re.split(r"毕业院校|毕业学校|毕业证编码|毕业时间|现已持有", match.group(1))[0]
+    values = []
+    aliases = (
+        ("研究生", ("博士研究生", "硕士研究生", "研究生", "博士", "硕士")),
+        ("本科", ("本科",)),
+        ("高职", ("高职", "大专", "专科")),
+        ("中职", ("中职", "中专")),
+        ("高中", ("高中",)),
+        ("初中", ("初中",)),
+    )
+    for canonical, markers in aliases:
+        if any(marker in segment for marker in markers):
+            values.append(canonical)
+    return values[0] if len(values) == 1 else ""
 
 
 def _education_form(text: str) -> str:
@@ -358,10 +387,10 @@ def extract_material(material: Material) -> tuple[list[Evidence], list[WorkRecor
             "毕业院校": (_school_name(text) if material.document_type in {"申报表", "学历证明", "学信网学籍证明", "学信网学历证明"} else "", lambda x: x.strip()),
             "毕业证编码": (_first([r"(?:毕业证书编号|学历证书编号|毕业证编号|毕业证号|证书编号)\s*[：:]?\s*([A-Za-z0-9\-]{6,40})", r"[（(](?:初|高)[）)]毕字[^号\n]{0,20}第?\s*([A-Za-z0-9\-]{6,40})\s*号"], text), lambda x: re.sub(r"\s", "", x).upper()),
             "学位证编码": (_first([r"(?:学位证书编号|学位证编号)\s*[：:]?\s*([A-Za-z0-9\-]{6,40})"], text), lambda x: re.sub(r"\s", "", x).upper()),
-            "学历层次": ("" if material.document_type == "申报表" else _education_level(text), lambda x: x),
+            "学历层次": (_form_education_level(text) if material.document_type == "申报表" else _education_level(text), lambda x: x),
             "学历形式": (_education_form(text), lambda x: x),
             "学籍状态": (_first([r"(?:学籍状态|状态)\s*[：:]?\s*(在籍|在校|保留学籍|休学|离籍|毕业|结业)"], text), lambda x: x),
-            "预计毕业时间": (_first([rf"预计毕业日期\s*[：:]?\s*({DATE})"], text), normalize_date),
+            "预计毕业时间": (_expected_graduation_date(text), normalize_date),
             "入学时间": (_first([rf"入学日期\s*[：:]?\s*({DATE})"], text), normalize_date),
             "专业": (_first([r"(?:学科专业|专业)\s*[：:]?\s*([^\n\t，,。；;]{1,50})"], text), lambda x: x.strip()),
             "学制": (_first([r"学制\s*[：:]?\s*([0-9一二三四五六七八九十]+年)"], text), lambda x: x.strip()),
