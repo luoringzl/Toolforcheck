@@ -83,10 +83,22 @@ class LocalTesseractOCR:
     def recognize(self, image: Image.Image) -> str:
         image = ImageOps.exif_transpose(image).convert("RGB")
         self.last_confidence = None
+        best_text = ""
+        best_confidence: float | None = None
         try:
-            rapid_text = self._recognize_rapid(image)
-            if len("".join(rapid_text.split())) >= 2:
-                return rapid_text
+            # 材料允许横向或竖向提交。依次尝试0/90/270/180度，选择可用
+            # 字符最多且置信度更高的结果，不要求用户手工旋转文件。
+            for angle in (0, 90, 270, 180):
+                candidate_image = image if angle == 0 else image.rotate(angle, expand=True)
+                candidate_text = self._recognize_rapid(candidate_image)
+                candidate_confidence = self.last_confidence
+                score = (len("".join(candidate_text.split())), candidate_confidence or 0.0)
+                best_score = (len("".join(best_text.split())), best_confidence or 0.0)
+                if score > best_score:
+                    best_text, best_confidence = candidate_text, candidate_confidence
+            self.last_confidence = best_confidence
+            if len("".join(best_text.split())) >= 2:
+                return best_text
         except Exception as exc:
             raise RuntimeError(f"离线OCR未能提取文字（RapidOCR: {exc}）") from exc
         return ""
