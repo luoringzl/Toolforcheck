@@ -71,8 +71,8 @@ def assess_id_image(image: Image.Image, cfg: QualityConfig) -> list[str]:
     glare, region = glare_metrics(image)
     if glare > cfg.glare_ratio_max or region > cfg.glare_largest_region_ratio_max:
         reasons.append("图片存在严重反光")
-    if h > w * 1.12:
-        reasons.append("图片疑似旋转90°，身份证应保持横向")
+    # 横向、竖向均允许；90°方向不作为退回原因。真正的轻度严重歪斜仍由
+    # 直线角度检测处理，OCR会自动尝试四个正交方向。
     rotation = detect_rotation(image)
     if rotation is not None and rotation > cfg.severe_rotation_degrees:
         reasons.append(f"图片严重倾斜或旋转（约 {rotation:.0f}°）")
