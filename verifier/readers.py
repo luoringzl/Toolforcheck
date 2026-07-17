@@ -119,8 +119,11 @@ def _render_pdf_page(page: fitz.Page, dpi: int) -> Image.Image:
 
 
 def read_material(person: str, path: Path, cfg: AppConfig, ocr: LocalTesseractOCR) -> Material:
-    kind = classify_document(path)
-    m = Material(person=person, path=path, document_type=kind)
+    # 文件名不参与最终材料类型判定。文档以正文/OCR内容分类，证件照以图像
+    # 构图分类；文件名中即使含“身份证/学历/照片”等字样也不能覆盖内容结论。
+    m = Material(person=person, path=path, document_type="其他材料")
+    raster_image: Image.Image | None = None
+    rendered_pdf_pages: list[tuple[int, Image.Image]] = []
     try:
         suffix = path.suffix.lower()
         if suffix == ".docx":
@@ -133,13 +136,8 @@ def read_material(person: str, path: Path, cfg: AppConfig, ocr: LocalTesseractOC
                     m.text_pages.append(text)
                 else:
                     image = _render_pdf_page(page, cfg.image_dpi)
-                    if kind == "身份证":
-                        reasons = assess_id_image(image, cfg.quality)
-                        m.quality_reasons.extend(f"第{page.number + 1}页：{r}" for r in reasons)
-                    elif kind == "证件照":
-                        reasons = assess_id_photo(image)
-                        m.quality_reasons.extend(f"第{page.number + 1}页：{r}" for r in reasons)
-                    page_text = ocr.recognize(image) if not m.quality_reasons and kind != "证件照" else ""
+                    rendered_pdf_pages.append((page.number + 1, image))
+                    page_text = ocr.recognize(image)
                     m.text_pages.append(page_text)
                     if page_text and ocr.last_confidence is not None:
                         m.ocr_confidence = (
@@ -147,24 +145,39 @@ def read_material(person: str, path: Path, cfg: AppConfig, ocr: LocalTesseractOC
                             else min(m.ocr_confidence, ocr.last_confidence)
                         )
         else:
-            image = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
-            if kind == "身份证":
-                m.quality_reasons = assess_id_image(image, cfg.quality)
-            elif kind == "证件照":
-                m.quality_reasons = assess_id_photo(image)
-            if not m.quality_reasons and kind != "证件照":
-                m.text_pages = [ocr.recognize(image)]
+            raster_image = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
+            photo_reasons = assess_id_photo(raster_image)
+            if not photo_reasons:
+                m.document_type = "证件照"
+            else:
+                m.text_pages = [ocr.recognize(raster_image)]
                 m.ocr_confidence = ocr.last_confidence
+
+        if m.document_type != "证件照":
+            m.document_type = refine_document_type("其他材料", "\n".join(m.text_pages))
+
+        # 完成内容分类后再执行对应材料的质量门禁，避免错误文件名改变处理路径。
+        if m.document_type == "证件照":
+            if raster_image is not None:
+                m.quality_reasons = assess_id_photo(raster_image)
+            elif rendered_pdf_pages:
+                for page_no, image in rendered_pdf_pages:
+                    m.quality_reasons.extend(f"第{page_no}页：{reason}" for reason in assess_id_photo(image))
+        elif m.document_type == "身份证":
+            if raster_image is not None:
+                m.quality_reasons = assess_id_image(raster_image, cfg.quality)
+            else:
+                for page_no, image in rendered_pdf_pages:
+                    m.quality_reasons.extend(f"第{page_no}页：{reason}" for reason in assess_id_image(image, cfg.quality))
         if m.quality_reasons:
             m.quality_status = "退回"
-        m.document_type = refine_document_type(m.document_type, "\n".join(m.text_pages))
         if m.document_type == "工作证明" and suffix in {".pdf", ".jpg", ".jpeg", ".png"}:
             stamp_found = False
             if suffix == ".pdf":
                 doc = fitz.open(path)
                 stamp_found = any(has_red_stamp(_render_pdf_page(page, 140)) for page in doc)
             else:
-                stamp_found = has_red_stamp(ImageOps.exif_transpose(Image.open(path)).convert("RGB"))
+                stamp_found = has_red_stamp(raster_image or ImageOps.exif_transpose(Image.open(path)).convert("RGB"))
             if stamp_found:
                 if not m.text_pages: m.text_pages = [""]
                 m.text_pages[0] += "\n[检测到红色公章]"
