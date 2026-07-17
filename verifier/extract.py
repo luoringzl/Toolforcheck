@@ -330,10 +330,14 @@ def _work_proof_record(text: str, material: Material, page_no: int) -> list[Work
     company = _first([
         r"单位[（(]?盖章[）)]?\s*[：:]?\s*([^\n，,。；;]{2,80})",
         r"(?:单位名称|工作单位)\s*[：:]?\s*([^\n，,。；;]{2,80})",
+        r"在\s*([^\n，,。；;]{2,80})\s*[，,]?\s*从事",
     ], text)
     compact_text = re.sub(r"\s", "", text)
-    period = re.search(rf"自({DATE})(?:至今|(?:至|到|—|–|-)({DATE}))", compact_text)
-    occupation = _first([r"(?:从事|担任)\s*([^\n，,。；;]{1,40}?)(?:相关行业)?工作"], text)
+    period = re.search(rf"(?:自)?({DATE})(?:至今|(?:至|到|—|–|-)({DATE}))", compact_text)
+    occupation = _first([
+        r"(?:从事|担任)\s*([^\n，,。；;\d]{1,40}?)(?:职位|岗位)?(?:相关行业)?(?:工作)?\s*\d+(?:\.\d+)?\s*年",
+        r"(?:从事|担任)\s*([^\n，,。；;]{1,40}?)(?:相关行业)?工作",
+    ], text)
     if not company or not period:
         return []
     return [WorkRecord(material.person, normalize_company(company), normalize_date(period.group(1)), "至今" if period.group(2) is None else normalize_date(period.group(2)), None, f"{material.path.name} 第{page_no}页", occupation=occupation, source_type="工作证明")]
@@ -379,6 +383,11 @@ def extract_material(material: Material) -> tuple[list[Evidence], list[WorkRecor
             ),
             "申报等级": (_first([r"[（(]职业/工种[）)]\s*[_\s]*([1-5一二三四五])[_\s]*级"], text) if material.document_type in {"申报表", "工作年限承诺书"} else "", lambda x: x.strip()),
             "承诺工作年限": (_first([r"工作共\s*(\d+)\s*年"], text), lambda x: str(int(x) * 12)),
+            "从事本职业年限": (_first([r"从事本职业年限\s*[：:]?\s*(\d+(?:\.\d+)?)\s*年"], text) if material.document_type == "申报表" else "", lambda x: str(round(float(x) * 12))),
+            "证明工作年限": (_first([
+                r"(?:工作|任职)\s*(\d+(?:\.\d+)?)\s*年",
+                r"从事[^\n，,。；;]{1,40}?(?:职位|岗位)?\s*(\d+(?:\.\d+)?)\s*年",
+            ], text) if material.document_type == "工作证明" else "", lambda x: str(round(float(x) * 12))),
             "承诺人签名": (_first([r"(?:考生|本人|承诺人)签名\s*[：:]?\s*([\u4e00-\u9fff·]{2,8})"], text), normalize_name),
             "证明人姓名": (_first([r"(?:部门联系人|联系人)\s*[：:]?\s*([\u4e00-\u9fff·先生女士]{2,12})"], text) if material.document_type == "工作证明" else "", lambda x: x.strip()),
             "证明人电话": (_first([r"(?:联系电话|联系手机|电话)\s*[：:]?\s*(1\d{10}|0\d{2,3}-?\d{7,8})"], text) if material.document_type == "工作证明" else "", lambda x: re.sub(r"\D", "", x)),
