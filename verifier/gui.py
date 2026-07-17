@@ -17,7 +17,6 @@ class App(tk.Tk):
         self.minsize(720, 480)
         self.input_var = tk.StringVar()
         self.output_var = tk.StringVar(value=str(Path.cwd() / "核验报告.xlsx"))
-        self.registry_var = tk.StringVar()
         self.audit_mode_var = tk.StringVar(value="预审")
         self._build()
 
@@ -33,23 +32,20 @@ class App(tk.Tk):
         ttk.Label(frame, text="核验工具 · 完全离线 · 文件不会上传", font=("Microsoft YaHei UI", 16, "bold")).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 15))
         self._row(frame, "人员总文件夹（内含姓名文件夹）", self.input_var, self._input, 1)
         self._row(frame, "Excel输出位置", self.output_var, self._output, 2)
-        self._row(frame, "企业全称名录（可选）", self.registry_var, self._registry, 3)
-        ttk.Label(frame, text="审核模式").grid(row=4, column=0, sticky="w", pady=8)
-        ttk.Combobox(frame, textvariable=self.audit_mode_var, values=("预审", "正式审核"), state="readonly").grid(row=4, column=1, sticky="ew", padx=10)
-        note = "身份证照片模糊、严重反光或严重旋转时直接退回；企业简称直接退回。未提供企业名录时，形式完整的名称仍需人工确认。"
-        ttk.Label(frame, text=note, wraplength=740, foreground="#7A3E00").grid(row=5, column=0, columnspan=3, sticky="w", pady=10)
+        ttk.Label(frame, text="审核模式").grid(row=3, column=0, sticky="w", pady=8)
+        ttk.Combobox(frame, textvariable=self.audit_mode_var, values=("预审", "正式审核"), state="readonly").grid(row=3, column=1, sticky="ew", padx=10)
+        note = "材料可横向或竖向提交，以完整、清晰为准；企业名称与企业信息截图中的工商登记名称核对。"
+        ttk.Label(frame, text=note, wraplength=740, foreground="#7A3E00").grid(row=4, column=0, columnspan=3, sticky="w", pady=10)
         self.start = ttk.Button(frame, text="开始批量核验", command=self._start)
-        self.start.grid(row=6, column=0, columnspan=3, sticky="ew", pady=10)
+        self.start.grid(row=5, column=0, columnspan=3, sticky="ew", pady=10)
         self.log = tk.Text(frame, height=16, state="disabled", wrap="word")
-        self.log.grid(row=7, column=0, columnspan=3, sticky="nsew")
-        frame.rowconfigure(7, weight=1)
+        self.log.grid(row=6, column=0, columnspan=3, sticky="nsew")
+        frame.rowconfigure(6, weight=1)
 
     def _input(self):
         if p := filedialog.askdirectory(): self.input_var.set(p)
     def _output(self):
         if p := filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel", "*.xlsx")]): self.output_var.set(p)
-    def _registry(self):
-        if p := filedialog.askopenfilename(filetypes=[("企业名录", "*.xlsx *.csv")]): self.registry_var.set(p)
     def _append(self, text):
         self.after(0, lambda: self._append_ui(text))
     def _append_ui(self, text):
@@ -62,7 +58,7 @@ class App(tk.Tk):
     def _worker(self):
         try:
             cfg = AppConfig(audit_mode=self.audit_mode_var.get())
-            run(Path(self.input_var.get()), Path(self.output_var.get()), self.registry_var.get() or None, cfg=cfg, progress=self._append)
+            run(Path(self.input_var.get()), Path(self.output_var.get()), cfg=cfg, progress=self._append)
             self.after(0, lambda: messagebox.showinfo("完成", "批量核验完成，Excel报告已生成"))
         except Exception as e:
             self._append(f"错误：{e}")
