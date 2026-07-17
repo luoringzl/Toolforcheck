@@ -6,7 +6,7 @@ from unittest.mock import patch
 from docx import Document
 
 from verifier.company import CompanyRegistry
-from verifier.config import AppConfig
+from verifier.config import AppConfig, ReviewPreset
 from verifier.idcard import birthday_from_id, validate_cn_id
 from verifier.models import Evidence, Material, WorkRecord
 from verifier.normalize import duration_months, format_year_month, normalize_date
@@ -179,13 +179,59 @@ class RuleTests(unittest.TestCase):
             self.assertEqual(records[0].company, "闽清金鑫物业管理有限公司")
             self.assertEqual(records[1].end, "至今")
 
-    def test_all_eight_material_types_appear_in_completeness(self):
+    def test_all_configurable_material_types_appear_in_completeness(self):
         result = evaluate("测试", [], [], [], CompanyRegistry())
         fields = {f.field: f.status for f in result.findings if f.category == "材料完整性"}
-        expected = {"申报表", "证件照", "身份证", "学历证明", "工作证明", "学信网材料", "工作年限承诺书", "企业信息截图"}
+        expected = {
+            "申报表", "证件照", "身份证", "学历证明", "工作证明", "学信网材料",
+            "工作年限承诺书", "企业信息截图", "职业技能等级认定承诺书", "其他材料",
+        }
         self.assertTrue(expected.issubset(fields))
         self.assertEqual(fields["工作证明"], "不适用")
         self.assertEqual(fields["企业信息截图"], "不适用")
+
+    def test_forced_material_checkboxes_override_auto_rules(self):
+        cfg = AppConfig(review_preset=ReviewPreset(forced_required_materials=(
+            "工作证明", "学信网材料", "职业技能等级认定承诺书", "其他材料",
+        )))
+        result = evaluate("测试", [], [], [], CompanyRegistry(), cfg)
+        fields = {f.field: f for f in result.findings if f.category == "材料完整性"}
+        for kind in ("工作证明", "学信网材料", "职业技能等级认定承诺书", "其他材料"):
+            self.assertEqual(fields[kind].status, "缺少材料")
+
+    def test_manual_student_and_education_presets_drive_completeness(self):
+        cfg = AppConfig(review_preset=ReviewPreset(
+            is_college_student=True,
+            education_level="本科",
+        ))
+        result = evaluate("测试", [], [], [], CompanyRegistry(), cfg)
+        fields = {f.field: f for f in result.findings if f.category == "材料完整性"}
+        self.assertEqual(fields["学历证明"].status, "不适用")
+        self.assertEqual(fields["学信网材料"].status, "缺少材料")
+        self.assertFalse(any(f.category == "申报表填写核验" and f.field == "工作经历" for f in result.findings))
+
+    def test_manual_college_student_alone_exempts_diploma_and_requires_chsi(self):
+        cfg = AppConfig(review_preset=ReviewPreset(is_college_student=True))
+        result = evaluate("测试", [], [], [], CompanyRegistry(), cfg)
+        fields = {f.field: f for f in result.findings if f.category == "材料完整性"}
+        self.assertEqual(fields["学历证明"].status, "不适用")
+        self.assertEqual(fields["学信网材料"].status, "缺少材料")
+
+    def test_manual_multiple_work_history_requires_related_materials(self):
+        cfg = AppConfig(review_preset=ReviewPreset(
+            is_working=True,
+            work_history="2份及以上",
+        ))
+        result = evaluate("测试", [], [], [], CompanyRegistry(), cfg)
+        fields = {f.field: f for f in result.findings if f.category == "材料完整性"}
+        self.assertEqual(fields["工作证明"].status, "缺少材料")
+        self.assertEqual(fields["工作年限承诺书"].status, "缺少材料")
+        self.assertEqual(fields["企业信息截图"].status, "缺少材料")
+        self.assertTrue(any(f.category == "人工预设" and f.field == "工作经历" and f.status == "不一致" for f in result.findings))
+
+    def test_skill_assessment_commitment_is_separate_material_type(self):
+        text = "职业技能等级认定承诺书 本人承诺所提交材料真实有效"
+        self.assertEqual(refine_document_type("其他材料", text), "职业技能等级认定承诺书")
 
     def test_higher_education_material_is_selected(self):
         person = "测试人员"
