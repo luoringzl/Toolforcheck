@@ -19,6 +19,16 @@ def _first(patterns: list[str], text: str, flags: int = 0) -> str:
     return ""
 
 
+def _labelled_date(text: str, labels: tuple[str, ...], max_gap: int = 100) -> str:
+    """读取表格标签后的首个日期，容忍PDF把同一行单元格打散或夹入其他标签。"""
+    text = re.sub(r"[\s　]+", "", text)
+    label = "|".join(re.escape(value) for value in labels)
+    # 申报表PDF文本层不一定按视觉上的行顺序输出；允许标签与值之间出现少量
+    # 非日期文字，但遇到第一个阿拉伯年份后即必须由DATE完整匹配。
+    pattern = rf"(?:{label})\s*[：:]?(?:(?!(?:19|20)\d{{2}}).){{0,{max_gap}}}?({DATE})"
+    return _first([pattern], text, re.S)
+
+
 def _best_id(text: str) -> str:
     labelled = re.findall(r"(?:公民身份号码|身份证(?:号码|号)?)\s*[：:]?\s*([0-9Xx\s]{18,28})", text)
     compact = re.sub(r"\s", "", text)
@@ -340,7 +350,7 @@ def extract_material(material: Material) -> tuple[list[Evidence], list[WorkRecor
             "姓名": (_person_name(text, material.person), normalize_name),
             "性别": (_first([r"性别\s*[：:]?\s*([男女])"], text), lambda x: x),
             "身份证号": (id_number, normalize_id),
-            "出生日期": (_first([rf"(?:出生日期|出生年月|出生)\s*[：:]?\s*({DATE})"], text), normalize_date),
+            "出生日期": (_labelled_date(text, ("出生日期", "出生年月", "出生")), normalize_date),
             "毕业院校": (_school_name(text) if material.document_type in {"申报表", "学历证明", "学信网学籍证明", "学信网学历证明"} else "", lambda x: x.strip()),
             "毕业证编码": (_first([r"(?:毕业证书编号|学历证书编号|毕业证编号|毕业证号|证书编号)\s*[：:]?\s*([A-Za-z0-9\-]{6,40})", r"[（(](?:初|高)[）)]毕字[^号\n]{0,20}第?\s*([A-Za-z0-9\-]{6,40})\s*号"], text), lambda x: re.sub(r"\s", "", x).upper()),
             "学位证编码": (_first([r"(?:学位证书编号|学位证编号)\s*[：:]?\s*([A-Za-z0-9\-]{6,40})"], text), lambda x: re.sub(r"\s", "", x).upper()),
@@ -387,7 +397,7 @@ def extract_material(material: Material) -> tuple[list[Evidence], list[WorkRecor
             # 在籍人员尚未毕业，申报表“毕业时间”按学信网预计毕业日期核验。
             candidates["毕业时间"] = candidates["预计毕业时间"]
         else:
-            candidates["毕业时间"] = (_first([rf"(?:毕业时间|毕业日期|授予日期|发证日期)\s*[：:]?\s*({DATE})"], text), normalize_date)
+            candidates["毕业时间"] = (_labelled_date(text, ("毕业时间", "毕业日期", "授予日期", "发证日期")), normalize_date)
 
         for field, (raw, normalizer) in candidates.items():
             if raw:
