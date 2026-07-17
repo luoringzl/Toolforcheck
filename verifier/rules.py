@@ -95,12 +95,70 @@ def _select_valid_id(materials: list[Material], result: PersonResult) -> Materia
     return selected_front
 
 
-def _required_materials(result: PersonResult, materials: list[Material], form_work: list[WorkRecord], level: str, student_status: str) -> None:
+def _apply_review_preset(
+    result: PersonResult,
+    level: str,
+    student_status: str,
+    graduation: str,
+    form_work: list[WorkRecord],
+    cfg: AppConfig,
+) -> tuple[str, str, str]:
+    """用人工预设补充自动判断，并把采用情况写入审核报告。"""
+    preset = cfg.review_preset
+    if preset.is_college_student and preset.is_graduated:
+        _add(result, "人工预设", "人员身份", "不一致", "高校在校生与已毕业不能同时选择；本次仍采用材料自动判断")
+    elif preset.is_college_student:
+        student_status = "在籍"
+        _add(result, "人工预设", "人员身份", "已采用", "本批次人工指定为高校在校生；学历证明按在籍规则审核")
+    elif preset.is_graduated:
+        student_status = "毕业"
+        _add(result, "人工预设", "人员身份", "已采用", "本批次人工指定为已毕业；毕业证及工作经历按已毕业规则审核")
+    if preset.is_working:
+        _add(result, "人工预设", "人员身份", "已采用", "本批次人工指定为已工作；工作相关材料按有工作经历规则审核")
+
+    if preset.education_level:
+        level = preset.education_level
+        _add(result, "人工预设", "最高学历", "已采用", "最高学历采用操作面板人工预设", level)
+
+    actual_count = len(form_work)
+    if preset.work_history:
+        expected = preset.work_history
+        matched = (
+            (expected == "无" and actual_count == 0)
+            or (expected == "1份" and actual_count == 1)
+            or (expected == "2份及以上" and actual_count >= 2)
+        )
+        _add(
+            result,
+            "人工预设",
+            "工作经历",
+            "一致" if matched else "不一致",
+            "操作面板预设与申报表实际读取到的工作经历段数核对",
+            f"预设={expected}；申报表={actual_count}段",
+        )
+    if preset.is_working and actual_count == 0:
+        _add(result, "申报表填写核验", "工作经历", "缺少信息", "人工指定为已工作，但申报表未读取到完整工作经历")
+    return level, student_status, graduation
+
+
+def _required_materials(
+    result: PersonResult,
+    materials: list[Material],
+    form_work: list[WorkRecord],
+    level: str,
+    student_status: str,
+    cfg: AppConfig,
+) -> None:
     types = defaultdict(list)
     for material in materials:
         types[material.document_type].append(material)
+    preset = cfg.review_preset
+    forced = set(preset.forced_required_materials)
 
     def require(kind: str, condition: bool, reason: str, quantity: int = 1) -> None:
+        if kind in forced:
+            condition = True
+            reason = f"操作面板已勾选为本批次强制材料；{reason}"
         qualified = [m for m in types[kind] if _usable_material(m)]
         if kind == "身份证":
             # 身份证必须有可组合使用的清晰正反面；选择结果由_select_valid_id标记。
@@ -121,7 +179,9 @@ def _required_materials(result: PersonResult, materials: list[Material], form_wo
         _add(result, "材料完整性", "申报表全称", "人工复核", "已发现申报表文件，但未可靠识别到全称《福建省职业技能等级认定申报表》，请人工确认", sources="；".join(m.path.name for m in types["申报表"]))
     require("证件照", True, "证件照为必交材料")
     require("身份证", True, "身份证为必交材料")
-    is_higher_student = level in HIGHER_EDUCATION and student_status in IN_SCHOOL
+    is_higher_student = preset.is_college_student or (
+        level in HIGHER_EDUCATION and student_status in IN_SCHOOL
+    )
     require(
         "学历证明",
         not is_higher_student,
@@ -129,29 +189,38 @@ def _required_materials(result: PersonResult, materials: list[Material], form_wo
     )
     chsi_materials = [m for kind in CHSI_TYPES for m in types[kind] if _usable_material(m)]
     chsi_count = len(chsi_materials)
-    if level in HIGHER_EDUCATION and not chsi_count:
-        _add(result, "材料完整性", "学信网材料", "缺少材料", "大专及以上人员无论在校或毕业均须提交学信网材料", "应有至少1份，实有0份")
-    elif level in HIGHER_EDUCATION:
+    force_chsi = "学信网材料" in forced
+    chsi_required = level in HIGHER_EDUCATION or preset.is_college_student or force_chsi
+    if chsi_required and not chsi_count:
+        reason = "操作面板已勾选为本批次强制材料" if force_chsi else "大专及以上人员无论在校或毕业均须提交学信网材料"
+        _add(result, "材料完整性", "学信网材料", "缺少材料", reason, "应有至少1份，实有0份")
+    elif chsi_required:
         for material in chsi_materials:
             material.selected_as_basis = True
-        _add(result, "材料完整性", "学信网材料", "齐全", "已提交学信网材料", f"共{chsi_count}份")
+        reason = "操作面板已勾选为强制材料；已提交学信网材料" if force_chsi else "已提交学信网材料"
+        _add(result, "材料完整性", "学信网材料", "齐全", reason, f"共{chsi_count}份")
     else:
         _add(result, "材料完整性", "学信网材料", "不适用", "当前识别学历未达到大专及以上，未触发学信网材料要求", f"实有{chsi_count}份")
-    graduated = bool(level) and student_status not in IN_SCHOOL
+    graduated = preset.is_graduated or (bool(level) and student_status not in IN_SCHOOL)
     if graduated and not form_work:
         _add(result, "申报表填写核验", "工作经历", "缺少信息", "只有未毕业的在籍/在校人员允许工作经历为空；已毕业人员至少填写一段完整工作经历")
     usable_proofs = [m for m in types["工作证明"] if _usable_material(m)]
     usable_screenshots = [m for m in types["企业信息截图"] if _usable_material(m)]
-    inferred_has_work = bool(form_work or graduated or usable_proofs or usable_screenshots)
+    manual_work = preset.is_working or preset.work_history in {"1份", "2份及以上"}
+    manual_no_work = preset.work_history == "无"
+    inferred_has_work = False if manual_no_work else bool(form_work or graduated or manual_work or usable_proofs or usable_screenshots)
     if inferred_has_work:
         for group in (usable_proofs, usable_screenshots):
             for material in group:
                 material.selected_as_basis = True
     require("工作证明", inferred_has_work, "有工作经历时，仅最后一段工作经历必须有工作证明")
-    require("工作年限承诺书", len(form_work) > 1, "有2段及以上工作经历必须提交工作年限承诺书")
+    multiple_work = len(form_work) > 1 or preset.work_history == "2份及以上"
+    require("工作年限承诺书", multiple_work, "有2段及以上工作经历必须提交工作年限承诺书")
     # 每个不同企业均须有一份截图；同企业多段经历只要求一份。
     companies = {normalize_company(w.company) for w in form_work if w.company}
     require("企业信息截图", inferred_has_work, "每个工作经历企业均须提交企业信息截图", max(1, len(companies)))
+    require("职业技能等级认定承诺书", False, "仅在操作面板勾选时强制提交")
+    require("其他材料", False, "仅在操作面板勾选时强制至少提交一份其他材料")
 
 
 def _compare_form_to_id(result: PersonResult, form: Material | None, identity: Material | None) -> None:
@@ -463,9 +532,12 @@ def evaluate(person: str, materials: list[Material], evidences: list[Evidence], 
     if form and not form_work and (proof_work or any(m.document_type == "企业信息截图" for m in materials)):
         _add(result, "工作经历核对", "申报表工作经历", "缺少信息", "已提交工作证明或企业信息截图，但未从申报表读取到完整工作经历；不能仅用辅助材料替代申报表记录", sources=form.path.name)
     level, student_status, graduation = _education_rules(result, materials, form)
+    level, student_status, graduation = _apply_review_preset(
+        result, level, student_status, graduation, form_work, cfg
+    )
     if not level:
         _add(result, "学历信息", "学历层次", "人工复核", "未能从现有材料可靠判断学历层次，学信网材料要求需人工复核")
-    _required_materials(result, materials, form_work, level, student_status)
+    _required_materials(result, materials, form_work, level, student_status, cfg)
     _compare_form_to_id(result, form, identity)
     _work_rules(result, materials, form_work, work, graduation, identity, registry, cfg)
     _commitment_rules(result, materials, work, identity, form_work)
