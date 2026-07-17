@@ -101,8 +101,21 @@ def _school_name(text: str) -> str:
     )
     general = re.findall(rf"([\u4e00-\u9fff]{{2,30}}?{suffix})", compact)
     rejected = {"本校", "学校", "院校名称", "毕业院校"}
+    def cleaned(values: list[str]) -> list[str]:
+        result: list[str] = []
+        for value in values:
+            value = re.sub(r"^(?:名称|姓名)", "", value)
+            if value not in rejected and not value.startswith(("在本校", "于本校")):
+                result.append(value)
+        return result
+
+    # “学校名称/毕业院校”等明确标签后的值优先。不能再与页面其他“学院”
+    # 文本按长度竞争，否则学信网报告中的“系所 信息工程学院”等字段会覆盖学校名称。
+    labelled_values = cleaned(labelled)
+    if labelled_values:
+        return labelled_values[0]
     values = []
-    for value in labelled + general:
+    for value in general:
         value = re.sub(r"^(?:名称|姓名)", "", value)
         if value not in rejected and not value.startswith(("在本校", "于本校")):
             values.append(value)
@@ -319,6 +332,9 @@ def extract_material(material: Material) -> tuple[list[Evidence], list[WorkRecor
         dates = _all_dates(text)
         if material.document_type == "学历证明" and dates:
             candidates["毕业时间"] = (dates[-1], normalize_date)
+        elif material.document_type == "学信网学籍证明" and candidates["预计毕业时间"][0]:
+            # 在籍人员尚未毕业，申报表“毕业时间”按学信网预计毕业日期核验。
+            candidates["毕业时间"] = candidates["预计毕业时间"]
         else:
             candidates["毕业时间"] = (_first([rf"(?:毕业时间|毕业日期|授予日期|发证日期)\s*[：:]?\s*({DATE})"], text), normalize_date)
 
