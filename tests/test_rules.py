@@ -28,6 +28,42 @@ def evidence(person, filename, kind, field, raw, normalized=None):
 
 
 class RuleTests(unittest.TestCase):
+    def test_docx_vertical_merged_work_label_does_not_hide_data_row(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "陈韵歆申报表.docx"
+            doc = Document()
+            table = doc.add_table(rows=3, cols=5)
+            table.cell(0, 0).merge(table.cell(2, 0)).text = "工作经历"
+            for index, value in enumerate(["何年至何年", "从事何职业", "所在单位", "证明人姓名、电话"], 1):
+                table.cell(0, index).text = value
+            for index, value in enumerate(["2025.4 至今", "物业电工", "闽清金鑫物业管理有限公司", "黄先生 15959179257"], 1):
+                table.cell(1, index).text = value
+            doc.save(path)
+            form = Material("陈韵歆", path, "申报表")
+            form.text_pages = _docx_pages(path)
+            _, records = extract_material(form)
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0].start, "2025-04")
+            self.assertEqual(records[0].end, "至今")
+            self.assertEqual(records[0].occupation, "物业电工")
+            self.assertEqual(records[0].company, "闽清金鑫物业管理有限公司")
+            self.assertEqual(records[0].witness_phone, "15959179257")
+
+    def test_pdf_form_work_cells_split_across_lines(self):
+        text = (
+            "福建省职业技能等级认定申报表\n工\n作\n经\n历\n"
+            "何年至何年\n从事何职业\n所在单位\n证明人姓名、电话\n"
+            "2025.4 至今\n物业电工\n闽清金鑫物业管理\n有限公司\n黄先生 15959179257\n"
+        )
+        form = Material("陈韵歆", Path("陈韵歆申报表.pdf"), "申报表")
+        form.text_pages = [text]
+        _, records = extract_material(form)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].company, "闽清金鑫物业管理有限公司")
+        self.assertEqual(records[0].occupation, "物业电工")
+        self.assertEqual(records[0].end, "至今")
+        self.assertEqual(records[0].witness_phone, "15959179257")
+
     def test_docx_work_table_preserves_rows_and_cells(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "测试申报表.docx"
