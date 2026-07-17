@@ -109,8 +109,12 @@ def _required_materials(result: PersonResult, materials: list[Material], form_wo
         _add(result, "材料完整性", "申报表全称", "人工复核", "已发现申报表文件，但未可靠识别到全称《福建省职业技能等级认定申报表》，请人工确认", sources="；".join(m.path.name for m in types["申报表"]))
     require("证件照", True, "证件照为必交材料")
     require("身份证", True, "身份证为必交材料")
-    is_higher_student = level in {"高职", "本科"} and student_status in IN_SCHOOL
-    require("学历证明", not is_higher_student, "非高职、本科在校生必须提交最高学历证明")
+    is_higher_student = level in HIGHER_EDUCATION and student_status in IN_SCHOOL
+    require(
+        "学历证明",
+        not is_higher_student,
+        "大专及以上在籍/在校人员以学信网学籍材料为依据，无需提交毕业证；已毕业人员须提交最高学历毕业证",
+    )
     chsi_count = sum(len(types[kind]) for kind in CHSI_TYPES)
     if level in HIGHER_EDUCATION and not chsi_count:
         _add(result, "材料完整性", "学信网材料", "缺少材料", "大专及以上人员无论在校或毕业均须提交学信网材料", "应有至少1份，实有0份")
@@ -174,7 +178,12 @@ def _education_rules(result: PersonResult, materials: list[Material], form: Mate
     fields = _by_field(authority.evidences) if authority else {}
     level = fields.get("学历层次", [None])[0].normalized_value if fields.get("学历层次") else ""
     status = fields.get("学籍状态", [None])[0].normalized_value if fields.get("学籍状态") else ""
-    grad = fields.get("毕业时间", [None])[0].normalized_value if fields.get("毕业时间") else ""
+    # 学籍状态为“在籍/在校”时尚未毕业，核验申报表毕业时间应采用预计毕业日期。
+    # 已毕业人员仍采用毕业时间，且材料完整性规则继续要求最高学历毕业证。
+    if status in IN_SCHOOL and fields.get("预计毕业时间"):
+        grad = fields["预计毕业时间"][0].normalized_value
+    else:
+        grad = fields.get("毕业时间", [None])[0].normalized_value if fields.get("毕业时间") else ""
     same_rank = [
         material for material in candidates
         if material is not authority and education_score(material)[0] == education_score(authority)[0]
@@ -192,13 +201,23 @@ def _education_rules(result: PersonResult, materials: list[Material], form: Mate
     if form and authority:
         form_fields = _by_field(form.evidences)
         for field in ("毕业院校", "毕业时间"):
-            expected = fields.get(field, [None])[0].normalized_value if fields.get(field) else ""
+            expected = grad if field == "毕业时间" else fields.get(field, [None])[0].normalized_value if fields.get(field) else ""
             actual = form_fields.get(field, [None])[0].normalized_value if form_fields.get(field) else ""
             if field == "毕业时间": expected, actual = format_year_month(expected), format_year_month(actual)
             if not actual or not expected:
                 _add(result, "学习经历核对", field, "无法核对", "现有材料无法完整核实该项学习经历，请人工复核或补充证明材料", f"申报表={actual}；依据={expected}")
             else:
                 _add(result, "学习经历核对", field, "一致" if actual == expected else "不一致", f"申报表{field}与核验依据比较", f"申报表={actual}；依据={expected}", f"{form.path.name}；{authority.path.name}")
+        if status:
+            _add(
+                result,
+                "学习经历核对",
+                "学籍状态",
+                "在籍" if status in IN_SCHOOL else status,
+                "学信网学籍状态显示在籍/在校时，表示尚未毕业，并以预计毕业日期核验申报表",
+                status,
+                authority.path.name,
+            )
         if not any("初中" in p for p in form.text_pages):
             _add(result, "学习经历核对", "初中经历", "缺少信息", "申报表学习经历必须从初中开始填写", sources=form.path.name)
         else:
