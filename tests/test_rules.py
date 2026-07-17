@@ -1,6 +1,7 @@
 import unittest
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 from docx import Document
 
 from verifier.company import CompanyRegistry
@@ -9,7 +10,7 @@ from verifier.idcard import birthday_from_id, validate_cn_id
 from verifier.models import Evidence, Material, WorkRecord
 from verifier.normalize import duration_months, format_year_month, normalize_date
 from verifier.rules import evaluate
-from verifier.readers import classify_document, refine_document_type, _docx_pages
+from verifier.readers import classify_document, refine_document_type, _docx_pages, read_material
 from verifier.extract import extract_material
 from verifier.quality import has_red_stamp
 from verifier.quality import assess_id_photo
@@ -28,6 +29,49 @@ def evidence(person, filename, kind, field, raw, normalized=None):
 
 
 class RuleTests(unittest.TestCase):
+    def test_picture_filename_is_classified_by_visual_content(self):
+        class FakeOCR:
+            last_confidence = None
+            calls = 0
+            def recognize(self, image):
+                self.calls += 1
+                return ""
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "袁颖潞_picture-0.png"
+            Image.new("RGB", (800, 1000), (240, 220, 210)).save(path)
+            fake = FakeOCR()
+            with patch("verifier.readers.assess_id_photo", return_value=[]):
+                result = read_material("袁颖潞", path, AppConfig(), fake)
+            self.assertEqual(result.document_type, "证件照")
+            self.assertEqual(fake.calls, 0)
+            self.assertFalse(result.errors)
+
+    def test_misleading_filename_cannot_override_document_content(self):
+        class FakeOCR:
+            last_confidence = 0.99
+            def recognize(self, image):
+                return "企业名称 闽清金鑫物业管理有限公司 统一社会信用代码 91350124565353903Y 登记状态 存续 经营范围 物业管理"
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "身份证.png"
+            Image.new("RGB", (1000, 700), "white").save(path)
+            with patch("verifier.readers.assess_id_photo", return_value=["不是证件照"]):
+                result = read_material("测试", path, AppConfig(), FakeOCR())
+            self.assertEqual(result.document_type, "企业信息截图")
+
+    def test_form_irregular_birth_and_graduation_dates_are_not_missing(self):
+        text = (
+            "福建省职业技能等级认定申报表\n出生年月\n联系信息\n2004 年 10 月\n"
+            "最高学历 高职 毕业院校 福建农业职业技术学院\n毕业时间\n填写值\n2027 年 6 月 26 日\n"
+        )
+        form = Material("袁颖潞", Path("任意文件.pdf"), "申报表")
+        form.text_pages = [text]
+        evidences, _ = extract_material(form)
+        fields = {e.field: e.normalized_value for e in evidences}
+        self.assertEqual(fields["出生日期"], "2004-10")
+        self.assertEqual(fields["毕业时间"], "2027-06-26")
+
     def test_docx_vertical_merged_work_label_does_not_hide_data_row(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "陈韵歆申报表.docx"
