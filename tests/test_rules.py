@@ -198,6 +198,49 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(fields["职业技能等级"], "三级/高级工")
         self.assertEqual(fields["职业证书编号"], "S000035001051243000362")
 
+    def test_chsi_student_school_expected_graduation_and_diploma_exemption(self):
+        person = "蔡晴"
+        report_text = (
+            "教育部学籍在线验证报告 姓名 蔡晴 学校名称 福建农业职业技术学院 "
+            "层次 专科 专业 现代通信技术 学制 3年 学历类别 普通高等教育 "
+            "学习形式 普通全日制 分院 系所 信息工程学院 入学日期 2024年09月08日 "
+            "学籍状态 在籍（注册学籍） 预计毕业日期 2027年06月26日"
+        )
+        chsi = Material(person, Path("蔡晴_教育部学籍在线验证报告.pdf"), "学信网学籍证明")
+        chsi.text_pages = [report_text]
+        chsi.evidences, _ = extract_material(chsi)
+        fields = {e.field: e.normalized_value for e in chsi.evidences}
+        self.assertEqual(fields["毕业院校"], "福建农业职业技术学院")
+        self.assertEqual(fields["学历层次"], "大专")
+        self.assertEqual(fields["学籍状态"], "在籍")
+        self.assertEqual(fields["预计毕业时间"], "2027-06-26")
+        self.assertEqual(fields["毕业时间"], "2027-06-26")
+
+        form_evidences = [
+            evidence(person, "申报表.pdf", "申报表", "毕业院校", "福建农业职业技术学院"),
+            evidence(person, "申报表.pdf", "申报表", "毕业时间", "2027-06-26"),
+        ]
+        form = material(person, "申报表.pdf", "申报表", form_evidences)
+        form.text_pages = ["福建省职业技能等级认定申报表 初中"]
+        materials = [form, chsi, material(person, "证件照.jpg", "证件照"), material(person, "身份证.pdf", "身份证")]
+        result = evaluate(person, materials, form_evidences + chsi.evidences, [], CompanyRegistry())
+        findings = {(f.category, f.field): f for f in result.findings}
+        self.assertEqual(findings[("学习经历核对", "毕业院校")].status, "一致")
+        self.assertEqual(findings[("学习经历核对", "毕业时间")].status, "一致")
+        self.assertEqual(findings[("学习经历核对", "学籍状态")].status, "在籍")
+        self.assertEqual(findings[("材料完整性", "学历证明")].status, "不适用")
+
+    def test_graduated_higher_education_still_requires_diploma(self):
+        person = "已毕业人员"
+        chsi = material(person, "学历在线验证报告.pdf", "学信网学历证明", [
+            evidence(person, "学历在线验证报告.pdf", "学信网学历证明", "学历层次", "大专"),
+            evidence(person, "学历在线验证报告.pdf", "学信网学历证明", "学籍状态", "毕业"),
+            evidence(person, "学历在线验证报告.pdf", "学信网学历证明", "毕业院校", "示例职业技术学院"),
+            evidence(person, "学历在线验证报告.pdf", "学信网学历证明", "毕业时间", "2024-06-30"),
+        ])
+        result = evaluate(person, [chsi], chsi.evidences, [], CompanyRegistry())
+        self.assertTrue(any(f.category == "材料完整性" and f.field == "学历证明" and f.status == "缺少材料" for f in result.findings))
+
     def test_commitment_word_table_and_month_total(self):
         text = "工作年限承诺书\n姓名: 彭思敏，现申请参加 公共营养师 (职业/工种)_4__级职业技能等级认定，从事本职业或相关职业工作共5年，工作经历如下：\n2021年8月至2022年12月\t皇冠蛋糕店\t遂川县\t西点裱花师\n2023年2月至2026年5月\t可斯贝莉门店\t泉州市\t西点裱花师\n2026年6月至2026年7月\t福州市鼓楼区美日甜甜品店\t福州市\t西点裱花师\n考生签名：彭思敏"
         m = Material("彭思敏", Path("工作年限承诺书.docx"), "工作年限承诺书")
