@@ -13,13 +13,13 @@ from .report import write_report
 from .rules import evaluate
 
 
-def run(input_dir: Path, output: Path, registry_path: str | None = None, cfg: AppConfig | None = None, progress: Callable[[str], None] | None = None) -> list[PersonResult]:
+def run(input_dir: Path, output: Path, cfg: AppConfig | None = None, progress: Callable[[str], None] | None = None) -> list[PersonResult]:
     cfg = cfg or AppConfig()
     log = progress or (lambda _: None)
     ocr = LocalTesseractOCR(cfg.ocr_language)
     if not ocr.available():
         raise RuntimeError("未能加载离线RapidOCR模型，请重新安装核验工具")
-    registry = CompanyRegistry(registry_path)
+    registry = CompanyRegistry()
     people = sorted(p for p in input_dir.iterdir() if p.is_dir())
     if not people:
         raise ValueError("所选文件夹中没有人员子文件夹")
