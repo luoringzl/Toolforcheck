@@ -14,8 +14,21 @@ class QualityConfig:
 
 
 @dataclass
+class ReviewPreset:
+    """本批次可选的人工辅助判断；空值/False表示继续自动识别。"""
+
+    is_college_student: bool = False
+    is_graduated: bool = False
+    is_working: bool = False
+    education_level: str = ""  # 初中/高中/中职/高职/本科/研究生；空值为自动。
+    work_history: str = ""  # 无/1份/2份及以上；空值为自动。
+    forced_required_materials: tuple[str, ...] = ()
+
+
+@dataclass
 class AppConfig:
     quality: QualityConfig = field(default_factory=QualityConfig)
+    review_preset: ReviewPreset = field(default_factory=ReviewPreset)
     supported_extensions: tuple[str, ...] = (
         ".docx", ".pdf", ".jpg", ".jpeg", ".png"
     )
