@@ -1,5 +1,6 @@
 import unittest
 import tempfile
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 from docx import Document
@@ -13,7 +14,7 @@ from verifier.rules import evaluate
 from verifier.readers import classify_document, refine_document_type, _docx_pages, read_material
 from verifier.extract import extract_material
 from verifier.quality import has_red_stamp
-from verifier.quality import assess_id_photo
+from verifier.quality import assess_id_photo, assess_id_image
 from verifier.ocr import _extract_rapid_text
 from PIL import Image, ImageDraw
 
@@ -29,6 +30,54 @@ def evidence(person, filename, kind, field, raw, normalized=None):
 
 
 class RuleTests(unittest.TestCase):
+    def test_one_good_duplicate_makes_material_type_complete(self):
+        good = material("测试", "合格证件照.png", "证件照")
+        bad = material("测试", "模糊证件照.png", "证件照")
+        bad.quality_status = "退回"
+        bad.quality_reasons = ["图片模糊"]
+        result = evaluate("测试", [bad, good], [], [], CompanyRegistry())
+        complete = next(f for f in result.findings if f.category == "材料完整性" and f.field == "证件照")
+        self.assertEqual(complete.status, "齐全")
+        self.assertIn("合格1份", complete.values)
+        self.assertTrue(any(f.field == "证件照" and f.status == "材料不采用" for f in result.findings))
+        self.assertFalse(any(f.field == "证件照" and f.status == "退回" for f in result.findings))
+
+    def test_id_image_orientation_is_not_a_rejection_reason(self):
+        portrait = Image.new("RGB", (700, 1100), (180, 180, 180))
+        reasons = assess_id_image(portrait, AppConfig().quality)
+        self.assertFalse(any("横向" in reason or "旋转90" in reason for reason in reasons))
+
+    def test_graduated_person_must_fill_work_history(self):
+        diploma = material("测试", "高中毕业证.pdf", "学历证明", [
+            evidence("测试", "高中毕业证.pdf", "学历证明", "学历层次", "高中"),
+            evidence("测试", "高中毕业证.pdf", "学历证明", "毕业时间", "2021-07"),
+        ])
+        result = evaluate("测试", [diploma], diploma.evidences, [], CompanyRegistry())
+        self.assertTrue(any(f.category == "申报表填写核验" and f.field == "工作经历" and f.status == "缺少信息" for f in result.findings))
+        self.assertTrue(any(f.category == "材料完整性" and f.field == "工作证明" and f.status == "缺少材料" for f in result.findings))
+
+    def test_in_school_person_may_leave_work_history_empty(self):
+        chsi = material("测试", "学籍报告.pdf", "学信网学籍证明", [
+            evidence("测试", "学籍报告.pdf", "学信网学籍证明", "学历层次", "大专"),
+            evidence("测试", "学籍报告.pdf", "学信网学籍证明", "学籍状态", "在籍"),
+            evidence("测试", "学籍报告.pdf", "学信网学籍证明", "预计毕业时间", "2027-06"),
+        ])
+        result = evaluate("测试", [chsi], chsi.evidences, [], CompanyRegistry())
+        self.assertFalse(any(f.category == "申报表填写核验" and f.field == "工作经历" for f in result.findings))
+        self.assertTrue(any(f.category == "材料完整性" and f.field == "工作证明" and f.status == "不适用" for f in result.findings))
+
+    def test_work_proof_normative_sentence_is_extracted(self):
+        text = "工作证明 兹有我单位彭思敏，身份证号码：362427200301300325。自2026年6月至今，在福州市鼓楼区美日甜甜品店从事西点裱花师职位1年。部门联系人：蔡艺莹 联系电话：13115900153"
+        proof = Material("彭思敏", Path("任意文件.pdf"), "工作证明")
+        proof.text_pages = [text]
+        evidences, records = extract_material(proof)
+        fields = {e.field: e.normalized_value for e in evidences}
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].end, "至今")
+        self.assertEqual(records[0].company, "福州市鼓楼区美日甜甜品店")
+        self.assertEqual(records[0].occupation, "西点裱花师")
+        self.assertEqual(fields["证明工作年限"], "12")
+
     def test_picture_filename_is_classified_by_visual_content(self):
         class FakeOCR:
             last_confidence = None
@@ -353,6 +402,8 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(normalize_date("二O二四年七月十五日"), "2024-07-15")
         self.assertEqual(format_year_month("2018-07-07"), "2018.7")
         self.assertEqual(duration_months("2020-03", "2021-02"), 12)
+        today = date.today()
+        self.assertEqual(duration_months(f"{today.year}-01", "至今"), today.month)
 
     def test_form_labels_are_not_values(self):
         text = "福建省职业技能等级认定申报表\n姓名\t陈俊顺\t性别\t男\n最高学历\t初中/中职/高中\t毕业院校\n申报职业\t申报等级\t现工作单位\n工作经历\t从事何职业\t所在单位\t证明人姓名、电话\n学习经历\t初中\t高职/本科"
@@ -376,7 +427,7 @@ class RuleTests(unittest.TestCase):
         registry = CompanyRegistry()
         self.assertEqual(registry.validate("腾讯")[0], "退回")
         self.assertIn("简称", registry.validate("腾讯公司")[1])
-        self.assertEqual(registry.validate("深圳市腾讯计算机系统有限公司")[0], "待复核")
+        self.assertEqual(registry.validate("深圳市腾讯计算机系统有限公司")[0], "通过")
 
     def test_form_identity_mismatch(self):
         person = "张三"
