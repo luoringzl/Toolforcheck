@@ -73,7 +73,12 @@ def month_index(value: str) -> int | None:
 
 
 def duration_months(start: str, end: str) -> int | None:
-    a, b = month_index(start), month_index(end)
+    a = month_index(start)
+    if compact(end) == "至今":
+        today = date.today()
+        b = today.year * 12 + today.month - 1
+    else:
+        b = month_index(end)
     if a is None or b is None or b < a:
         return None
     return b - a + 1
